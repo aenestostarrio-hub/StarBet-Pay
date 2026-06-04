@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
+import { dbService, isSupabaseConfigured } from './lib/supabase';
 
 // Web audio API programmatic chime synthesizer to alert the admin
 function playChimeNotification() {
@@ -172,41 +173,31 @@ export default function App() {
   // Fetch general app configurations
   const fetchAppConfigAndData = async () => {
     try {
-      const configRes = await fetch('/api/config');
-      if (configRes.ok) {
-        const configData = await configRes.json();
-        setConfig(configData);
-        setConfigForm({
-          popupEnabled: configData.popupEnabled,
-          popupTitle: configData.popupTitle,
-          popupMessage: configData.popupMessage,
-          supportWhatsapp: configData.supportWhatsapp,
-          withdrawalPhysVille: configData.withdrawalPhysVille,
-          withdrawalPhysRue: configData.withdrawalPhysRue
-        });
+      const configData = await dbService.getConfig();
+      setConfig(configData);
+      setConfigForm({
+        popupEnabled: configData.popupEnabled,
+        popupTitle: configData.popupTitle,
+        popupMessage: configData.popupMessage,
+        supportWhatsapp: configData.supportWhatsapp,
+        withdrawalPhysVille: configData.withdrawalPhysVille,
+        withdrawalPhysRue: configData.withdrawalPhysRue
+      });
+
+      const pmData = await dbService.getPaymentMethods();
+      setPaymentMethods(pmData);
+      // Default select active payment method
+      const activePm = pmData.find((p: PaymentMethod) => p.active);
+      if (activePm) {
+        setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+        setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
       }
 
-      const paymentMethodsRes = await fetch('/api/payment-methods');
-      if (paymentMethodsRes.ok) {
-        const pmData = await paymentMethodsRes.json();
-        setPaymentMethods(pmData);
-        // Default select active payment method
-        const activePm = pmData.find((p: PaymentMethod) => p.active);
-        if (activePm) {
-          setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
-          setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
-        }
-      }
+      const couponsData = await dbService.getCoupons();
+      setCoupons(couponsData);
 
-      const couponsRes = await fetch('/api/coupons');
-      if (couponsRes.ok) {
-        setCoupons(await couponsRes.json());
-      }
-
-      const historyRes = await fetch('/api/coupons/history');
-      if (historyRes.ok) {
-        setPastCoupons(await historyRes.json());
-      }
+      const historyData = await dbService.getPastCoupons();
+      setPastCoupons(historyData);
     } catch (err) {
       console.error('Error fetching baseline app data:', err);
     }
@@ -215,15 +206,11 @@ export default function App() {
   // Fetch client specific transactions and referral stats
   const fetchClientUserData = async (phone: string) => {
     try {
-      const txRes = await fetch(`/api/transactions?phone=${phone}`);
-      if (txRes.ok) {
-        setTransactions(await txRes.json());
-      }
+      const txData = await dbService.getTransactions(phone);
+      setTransactions(txData);
 
-      const statsRes = await fetch(`/api/users/stats/${phone}`);
-      if (statsRes.ok) {
-        setRefStats(await statsRes.json());
-      }
+      const statsData = await dbService.getUserStats(phone);
+      setRefStats(statsData);
     } catch (err) {
       console.error('Error fetching client credentials:', err);
     }
@@ -232,10 +219,8 @@ export default function App() {
   // Fetch ALL transactions for Admin Dashboard
   const fetchAdminTransactions = async () => {
     try {
-      const res = await fetch('/api/transactions');
-      if (res.ok) {
-        setTransactions(await res.json());
-      }
+      const txData = await dbService.getTransactions();
+      setTransactions(txData);
     } catch (e) {
       console.error(e);
     }
@@ -269,42 +254,71 @@ export default function App() {
     }
   }, [user]);
 
-  // Establish Real-Time Server-Sent Events (SSE) notification bridge for administrators
+  // Establish Real-Time or Polling notifications for administrators
   useEffect(() => {
     let eventSource: EventSource | null = null;
+    let pollInterval: any = null;
     
     if (user && user.role === 'admin') {
-      eventSource = new EventSource('/api/admin/notifications-sse');
-      
-      eventSource.onmessage = (event) => {
+      if (isSupabaseConfigured) {
+        // Direct polling to avoid SSE / server failure on Vercel
+        let lastCount = transactions.length;
+        pollInterval = setInterval(async () => {
+          try {
+            const txData = await dbService.getTransactions();
+            if (txData.length > lastCount) {
+              const newTxs = txData.slice(0, txData.length - lastCount);
+              newTxs.forEach(tx => {
+                playChimeNotification();
+                setAdminNotifications(prev => [tx, ...prev]);
+              });
+              setTransactions(txData);
+            }
+            lastCount = txData.length;
+          } catch (e) {
+            console.warn('Real-time poll error:', e);
+          }
+        }, 8000);
+      } else {
         try {
-          const newTxListObj = JSON.parse(event.data) as DBTransaction;
-          console.log('[SSE Real-time notification received]:', newTxListObj);
+          eventSource = new EventSource('/api/admin/notifications-sse');
           
-          // Auditory notification buzzer simulation
-          playChimeNotification();
+          eventSource.onmessage = (event) => {
+            try {
+              const newTxListObj = JSON.parse(event.data) as DBTransaction;
+              console.log('[SSE Real-time notification received]:', newTxListObj);
+              
+              // Auditory notification buzzer simulation
+              playChimeNotification();
 
-          // Push into live banner list
-          setAdminNotifications(prev => [newTxListObj, ...prev]);
+              // Push into live banner list
+              setAdminNotifications(prev => [newTxListObj, ...prev]);
 
-          // Refresh current table transactions
-          fetchAdminTransactions();
-        } catch (error) {
-          console.error('[SSE event source failure]:', error);
+              // Refresh current table transactions
+              fetchAdminTransactions();
+            } catch (error) {
+              console.error('[SSE event source failure]:', error);
+            }
+          };
+
+          eventSource.onerror = (err) => {
+            console.warn('Admin SSE notification stream paused or reconnecting...', err);
+          };
+        } catch (err) {
+          console.warn('EventSource initialization bypassed: ', err);
         }
-      };
-
-      eventSource.onerror = (err) => {
-        console.warn('Admin SSE notification stream paused or reconnecting...', err);
-      };
+      }
     }
 
     return () => {
       if (eventSource) {
         eventSource.close();
       }
+      if (pollInterval) {
+        clearInterval(pollInterval);
+      }
     };
-  }, [user]);
+  }, [user, transactions.length]);
 
   // Handle generic clipboard copies
   const handleCopyToClipboard = (text: string) => {
@@ -322,27 +336,18 @@ export default function App() {
     setAuthSuccess('');
 
     try {
-      const res = await fetch('/api/auth/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: authForm.phone.trim(),
-          name: authForm.name.trim(),
-          password: authForm.password,
-          parentPhone: authForm.parentPhone ? authForm.parentPhone.trim() : undefined
-        })
-      });
+      await dbService.register(
+        authForm.phone.trim(),
+        authForm.name.trim(),
+        authForm.password,
+        authForm.parentPhone ? authForm.parentPhone.trim() : undefined
+      );
 
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-      } else {
-        setAuthSuccess('Votre compte a été enregistré avec succès ! Veuillez vous connecter.');
-        setAuthForm(prev => ({ ...prev, password: '' })); // clear password
-        setAuthTab('login');
-      }
+      setAuthSuccess('Votre compte a été enregistré avec succès ! Veuillez vous connecter.');
+      setAuthForm(prev => ({ ...prev, password: '' })); // clear password
+      setAuthTab('login');
     } catch (err: any) {
-      setAuthError('Erreur de connexion. Veuillez réessayer.');
+      setAuthError(err.message || 'Erreur lors de l\'enregistrement.');
     }
   };
 
@@ -353,25 +358,16 @@ export default function App() {
     setAuthSuccess('');
 
     try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: authForm.phone.trim(),
-          password: authForm.password
-        })
-      });
+      const data = await dbService.login(
+        authForm.phone.trim(),
+        authForm.password
+      );
 
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-      } else {
-        // Correct credentials, proceed to full-factor verification block
-        setTempUser(data.tempUser);
-        setMfaCode('');
-      }
+      // Correct credentials, proceed to full-factor verification block
+      setTempUser(data.tempUser);
+      setMfaCode('');
     } catch (err: any) {
-      setAuthError('Une erreur de connexion est survenue. Veuillez vérifier votre réseau.');
+      setAuthError(err.message || 'Une erreur de connexion est survenue. Veuillez vérifier votre réseau.');
     }
   };
 
@@ -382,25 +378,16 @@ export default function App() {
     setAuthSuccess('');
 
     try {
-      const res = await fetch('/api/auth/verify-mfa', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          phone: tempUser.phone,
-          code: mfaCode.trim()
-        })
-      });
+      const userData = await dbService.verifyMfa(
+        tempUser.phone,
+        mfaCode.trim()
+      );
 
-      const data = await res.json();
-      if (!res.ok) {
-        setAuthError(data.error);
-      } else {
-        setUser(data.user);
-        localStorage.setItem('starbetpay_user', JSON.stringify(data.user));
-        setTempUser(null);
-      }
+      setUser(userData);
+      localStorage.setItem('starbetpay_user', JSON.stringify(userData));
+      setTempUser(null);
     } catch (e: any) {
-      setAuthError('Code MFA incorrect ou expiré. Veillez utiliser le code de démo.');
+      setAuthError(e.message || 'Code MFA incorrect ou expiré. Veillez utiliser le code de démo.');
     }
   };
 
@@ -453,31 +440,23 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/transactions/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'deposit',
-          amount: Number(depositForm.amount),
-          userPhone: user!.phone,
-          xbetAccount: depositForm.xbetAccount,
-          paymentMethod: depositForm.paymentMethod,
-          paymentNumber: paymentNumberValue,
-          screenshot: screenshotBase64
-        })
+      const transaction = await dbService.createTransaction({
+        type: 'deposit',
+        amount: Number(depositForm.amount),
+        userPhone: user!.phone,
+        userName: user!.name,
+        xbetAccount: depositForm.xbetAccount,
+        paymentMethod: depositForm.paymentMethod,
+        paymentNumber: paymentNumberValue,
+        screenshot: screenshotBase64
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setFormMsg({ type: 'error', text: data.error });
-      } else {
-        setFormMsg({ type: 'success', text: data.message });
-        setDepositForm({ xbetAccount: '', amount: '', paymentMethod: paymentMethods[0]?.name || '' });
-        setScreenshotBase64('');
-        fetchClientUserData(user!.phone);
-      }
+      setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
+      setDepositForm({ xbetAccount: '', amount: '', paymentMethod: paymentMethods[0]?.name || '' });
+      setScreenshotBase64('');
+      fetchClientUserData(user!.phone);
     } catch (e: any) {
-      setFormMsg({ type: 'error', text: 'Erreur lors de la validation du dépôt.' });
+      setFormMsg({ type: 'error', text: e.message || 'Erreur lors de la validation du dépôt.' });
     } finally {
       setFormLoading(false);
     }
@@ -508,30 +487,22 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/transactions/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'withdrawal',
-          amount: Number(withdrawalForm.amount),
-          userPhone: user!.phone,
-          xbetAccount: 'COMPTE_RETRAIT',
-          paymentMethod: withdrawalForm.paymentMethod,
-          paymentNumber: withdrawalForm.paymentNumber,
-          withdrawCode: withdrawalForm.withdrawCode
-        })
+      const transaction = await dbService.createTransaction({
+        type: 'withdrawal',
+        amount: Number(withdrawalForm.amount),
+        userPhone: user!.phone,
+        userName: user!.name,
+        xbetAccount: 'COMPTE_RETRAIT',
+        paymentMethod: withdrawalForm.paymentMethod,
+        paymentNumber: withdrawalForm.paymentNumber,
+        withdrawCode: withdrawalForm.withdrawCode
       });
 
-      const data = await res.json();
-      if (!res.ok) {
-        setFormMsg({ type: 'error', text: data.error });
-      } else {
-        setFormMsg({ type: 'success', text: data.message });
-        setWithdrawalForm({ amount: '', withdrawCode: '', paymentMethod: paymentMethods[0]?.name || '', paymentNumber: '' });
-        fetchClientUserData(user!.phone);
-      }
+      setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
+      setWithdrawalForm({ amount: '', withdrawCode: '', paymentMethod: paymentMethods[0]?.name || '', paymentNumber: '' });
+      fetchClientUserData(user!.phone);
     } catch (e: any) {
-      setFormMsg({ type: 'error', text: 'Une erreur est survenue lors de la validation.' });
+      setFormMsg({ type: 'error', text: e.message || 'Une erreur est survenue lors de la validation.' });
     } finally {
       setFormLoading(false);
     }
@@ -550,20 +521,12 @@ export default function App() {
 
     setFormLoading(true);
     try {
-      const res = await fetch('/api/commissions/payout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ phone: user!.phone })
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        alert(data.error);
-      } else {
-        alert(data.message);
-        fetchClientUserData(user!.phone);
-      }
-    } catch (e) {
+      const data = await dbService.requestCommissionPayout(user!.phone);
+      alert(data.transaction ? 'Demande de retrait de gain effectuée avec succès.' : 'Erreur de retrait');
+      fetchClientUserData(user!.phone);
+    } catch (e: any) {
       console.error(e);
+      alert(e.message || 'Erreur lors de la demande de retrait.');
     } finally {
       setFormLoading(false);
     }
@@ -578,25 +541,16 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/transactions/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: txId, status, rejectionReason: reason })
+      const updatedTx = await dbService.updateTransactionStatus(txId, status, reason);
+      setAdminRejectedReason(prev => {
+        const next = { ...prev };
+        delete next[txId];
+        return next;
       });
-
-      const data = await res.json();
-      if (res.ok) {
-        setAdminRejectedReason(prev => {
-          const next = { ...prev };
-          delete next[txId];
-          return next;
-        });
-        fetchAdminTransactions();
-      } else {
-        alert(data.error);
-      }
-    } catch (e) {
+      fetchAdminTransactions();
+    } catch (e: any) {
       console.error(e);
+      alert(e.message || "Erreur lors de la mise à jour de la transaction.");
     }
   };
 
@@ -604,21 +558,13 @@ export default function App() {
   const handleUpdateConfig = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/config/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(configForm)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setConfig(data.config);
-        alert('Configuration de StarBetPay enregistrée avec succès.');
-        fetchAppConfigAndData();
-      } else {
-        alert(data.error);
-      }
-    } catch (err) {
+      const updatedConfig = await dbService.updateConfig(configForm);
+      setConfig(updatedConfig);
+      alert('Configuration de StarBetPay enregistrée avec succès.');
+      fetchAppConfigAndData();
+    } catch (err: any) {
       console.error(err);
+      alert(err.message || 'Erreur lors de la mise à jour.');
     }
   };
 
@@ -631,36 +577,21 @@ export default function App() {
     }
 
     try {
-      const res = await fetch('/api/payment-methods', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(paymentMethodForm)
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPaymentMethods(data.paymentMethods);
-        setPaymentMethodForm({ name: '', number: '' });
-        alert('Nouveau moyen de de paiement enregistré.');
-      } else {
-        alert(data.error);
-      }
-    } catch (e) {
+      const pms = await dbService.addOrUpdatePaymentMethod(paymentMethodForm.name, paymentMethodForm.number);
+      setPaymentMethods(pms);
+      setPaymentMethodForm({ name: '', number: '' });
+      alert('Nouveau moyen de de paiement enregistré.');
+    } catch (e: any) {
       console.error(e);
+      alert(e.message || "Erreur lors de l'enregistrement.");
     }
   };
 
   // Action: Toggle payment method active/inactive
   const handleTogglePaymentMethod = async (name: string) => {
     try {
-      const res = await fetch('/api/payment-methods/toggle', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPaymentMethods(data.paymentMethods);
-      }
+      const pms = await dbService.togglePaymentMethod(name);
+      setPaymentMethods(pms);
     } catch (e) {
       console.error(e);
     }
@@ -671,33 +602,24 @@ export default function App() {
     e.preventDefault();
     setFormLoading(true);
     try {
-      const res = await fetch('/api/coupons/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: couponEditForm.id,
-          title: couponEditForm.title,
-          confidence: couponEditForm.confidence,
-          totalCote: Number(couponEditForm.totalCote),
-          matches: couponEditForm.matches.map((m, idx) => ({
-            id: idx + 1,
-            homeTeam: m.homeTeam.trim(),
-            awayTeam: m.awayTeam.trim(),
-            prediction: m.prediction.trim(),
-            odd: Number(m.odd)
-          }))
-        })
+      const updatedCoupons = await dbService.updateCoupon({
+        id: couponEditForm.id,
+        title: couponEditForm.title,
+        confidence: couponEditForm.confidence,
+        totalCote: Number(couponEditForm.totalCote),
+        matches: couponEditForm.matches.map((m, idx) => ({
+          id: idx + 1,
+          homeTeam: m.homeTeam.trim(),
+          awayTeam: m.awayTeam.trim(),
+          prediction: m.prediction.trim(),
+          odd: Number(m.odd)
+        }))
       });
-      const data = await res.json();
-      if (res.ok) {
-        setCoupons(data.coupons);
-        alert("Le coupon a été enregistré et publié avec succès !");
-      } else {
-        alert(data.error || "Erreur lors de l'enregistrement du coupon.");
-      }
-    } catch (e) {
+      setCoupons(updatedCoupons);
+      alert("Le coupon a été enregistré et publié avec succès !");
+    } catch (e: any) {
       console.error(e);
-      alert("Impossible de contacter le serveur pour enregistrer le coupon.");
+      alert(e.message || "Erreur lors de l'enregistrement du coupon.");
     } finally {
       setFormLoading(false);
     }
@@ -710,25 +632,13 @@ export default function App() {
     }
     setFormLoading(true);
     try {
-      const res = await fetch('/api/coupons/result', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          id: selectedCouponId,
-          status
-        })
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setCoupons(data.coupons);
-        setPastCoupons(data.pastCoupons);
-        alert(`Le coupon a été déclaré ${status === 'won' ? 'GAGNÉ' : 'PERDU'} avec succès !`);
-      } else {
-        alert(data.error || "Erreur lors de la validation du résultat.");
-      }
-    } catch (e) {
+      const data = await dbService.setCouponResult(selectedCouponId, status);
+      setCoupons(data.coupons);
+      setPastCoupons(data.pastCoupons);
+      alert(`Le coupon a été déclaré ${status === 'won' ? 'GAGNÉ' : 'PERDU'} avec succès !`);
+    } catch (e: any) {
       console.error(e);
-      alert("Erreur de connexion.");
+      alert(e.message || "Erreur de connexion.");
     } finally {
       setFormLoading(false);
     }
@@ -740,17 +650,11 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`/api/coupons/history/${historyId}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPastCoupons(data.pastCoupons);
-      } else {
-        alert(data.error || "Erreur lors de la suppression.");
-      }
-    } catch (e) {
+      const historyData = await dbService.deleteHistoryEntry(historyId);
+      setPastCoupons(historyData);
+    } catch (e: any) {
       console.warn(e);
+      alert(e.message || "Erreur lors de la suppression.");
     }
   };
 
@@ -760,15 +664,10 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch('/api/coupons/history/clear', {
-        method: 'POST'
-      });
-      const data = await res.json();
-      if (res.ok) {
-        setPastCoupons(data.pastCoupons);
-        alert("L'historique a été réinitialisé.");
-      }
-    } catch (e) {
+      const historyData = await dbService.clearHistory();
+      setPastCoupons(historyData);
+      alert("L'historique a été réinitialisé.");
+    } catch (e: any) {
       console.warn(e);
     }
   };
@@ -814,7 +713,18 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-base font-extrabold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">StarBetPay</h1>
-            <p className="text-[10px] text-gray-400 font-medium font-mono uppercase tracking-widest">1XBET • DÉPÔT & RETRAIT</p>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] text-gray-400 font-medium font-mono uppercase tracking-widest">1XBET • DÉPÔT & RETRAIT</span>
+              {isSupabaseConfigured ? (
+                <span className="text-[8px] font-mono tracking-wider text-emerald-400 font-bold bg-emerald-500/10 px-1 py-0.2 rounded border border-emerald-500/20">
+                  ● CLOUD
+                </span>
+              ) : (
+                <span className="text-[8px] font-mono tracking-wider text-amber-400 font-bold bg-amber-500/10 px-1 py-0.2 rounded border border-amber-500/20">
+                  ▲ LOCAL
+                </span>
+              )}
+            </div>
           </div>
         </div>
 
