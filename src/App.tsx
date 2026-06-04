@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
-import { dbService, isSupabaseConfigured } from './lib/supabase';
+import { dbService, isSupabaseConfigured, useLocalStorageSandbox } from './lib/supabase';
 
 // Web audio API programmatic chime synthesizer to alert the admin
 function playChimeNotification() {
@@ -260,8 +260,8 @@ export default function App() {
     let pollInterval: any = null;
     
     if (user && user.role === 'admin') {
-      if (isSupabaseConfigured) {
-        // Direct polling to avoid SSE / server failure on Vercel
+      if (isSupabaseConfigured || useLocalStorageSandbox) {
+        // Direct polling to avoid SSE / server failure on Vercel or Sandbox
         let lastCount = transactions.length;
         pollInterval = setInterval(async () => {
           try {
@@ -719,8 +719,12 @@ export default function App() {
                 <span className="text-[8px] font-mono tracking-wider text-emerald-400 font-bold bg-emerald-500/10 px-1 py-0.2 rounded border border-emerald-500/20">
                   ● CLOUD
                 </span>
-              ) : (
+              ) : useLocalStorageSandbox ? (
                 <span className="text-[8px] font-mono tracking-wider text-amber-400 font-bold bg-amber-500/10 px-1 py-0.2 rounded border border-amber-500/20">
+                  ▲ SANDBOX
+                </span>
+              ) : (
+                <span className="text-[8px] font-mono tracking-wider text-cyan-400 font-bold bg-cyan-500/10 px-1 py-0.2 rounded border border-cyan-500/20">
                   ▲ LOCAL
                 </span>
               )}
