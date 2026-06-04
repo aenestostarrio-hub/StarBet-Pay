@@ -1,0 +1,6 @@
+{
+  "name": "StarBetPay",
+  "description": "StarBetPay est une application web ultra-sécurisée de dépôt et retrait 1xBet intégrant l'authentification multifacteur, le parrainage avec commission de 1%, des pronostics IA sportifs premium et un tableau de bord analytique.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
