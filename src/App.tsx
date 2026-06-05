@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { 
-  Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, 
+  Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert
 } from 'lucide-react';
@@ -110,6 +110,73 @@ export default function App() {
   const [adminSubTab, setAdminSubTab] = useState<'pending' | 'validated' | 'rejected'>('pending');
   const [adminRejectedReason, setAdminRejectedReason] = useState<Record<string, string>>({});
   const [activeReceiptLightbox, setActiveReceiptLightbox] = useState<string | null>(null);
+  
+  // Client interactive overlay modal state
+  const [isClientPopupDismissed, setIsClientPopupDismissed] = useState<boolean>(() => {
+    try {
+      return sessionStorage.getItem('starbetpay_popup_dismissed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+
+  // Modern Toast notification system to replace window.alert (which are blocked in browser iframes)
+  const [toasts, setToasts] = useState<Array<{ id: string; message: string; type: 'success' | 'error' | 'info' | 'warning' }>>([]);
+  const showToast = (message: string, type: 'success' | 'error' | 'info' | 'warning' = 'success') => {
+    const id = Date.now().toString() + Math.random().toString();
+    setToasts(prev => [...prev, { id, message, type }]);
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, 4500);
+  };
+
+  const [notificationPermission, setNotificationPermission] = useState<string>(() => {
+    try {
+      return 'Notification' in window ? Notification.permission : 'default';
+    } catch {
+      return 'default';
+    }
+  });
+
+  const dismissClientPopup = () => {
+    setIsClientPopupDismissed(true);
+    try {
+      sessionStorage.setItem('starbetpay_popup_dismissed', 'true');
+    } catch (e) {
+      console.warn(e);
+    }
+  };
+
+  const requestNotificationPermission = async () => {
+    if (!('Notification' in window)) {
+      showToast("Ce navigateur ne prend pas en charge les notifications de bureau.", "warning");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setNotificationPermission(permission);
+      if (permission === 'granted') {
+        if ('serviceWorker' in navigator) {
+          const reg = await navigator.serviceWorker.ready;
+          reg.showNotification("Notifications activées ! 🎉", {
+            body: "Vous recevrez désormais les alertes de vos dépôts et retraits même si l'application est fermée.",
+            icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+          });
+        } else {
+          new Notification("Notifications activées ! 🎉", {
+            body: "Vous recevrez désormais les alertes de transaction sur cet appareil.",
+            icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+          });
+        }
+        showToast("Notifications activées avec succès ! 🎉", "success");
+      } else {
+        showToast("L'autorisation pour les notifications a été refusée.", "info");
+      }
+    } catch (err) {
+      console.error("Erreur de demande de permission de notification :", err);
+      showToast("Impossible d'activer les notifications.", "error");
+    }
+  };
   
   // Real-time Administrator notifications & status list
   const [adminNotifications, setAdminNotifications] = useState<any[]>([]);
@@ -599,11 +666,11 @@ export default function App() {
     try {
       const updatedConfig = await dbService.updateConfig(configForm);
       setConfig(updatedConfig);
-      alert('Configuration de StarBetPay enregistrée avec succès.');
+      showToast('Configuration de StarBetPay enregistrée avec succès. ✅', 'success');
       fetchAppConfigAndData();
     } catch (err: any) {
       console.error(err);
-      alert(err.message || 'Erreur lors de la mise à jour.');
+      showToast(err.message || 'Erreur lors de la mise à jour.', 'error');
     }
   };
 
@@ -611,7 +678,7 @@ export default function App() {
   const handleAddPaymentMethod = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentMethodForm.name || !paymentMethodForm.number) {
-      alert('Veuillez remplir les champs Nom et Numéro de dépôt');
+      showToast('Veuillez remplir les champs Nom et Numéro de dépôt', 'warning');
       return;
     }
 
@@ -619,10 +686,10 @@ export default function App() {
       const pms = await dbService.addOrUpdatePaymentMethod(paymentMethodForm.name, paymentMethodForm.number);
       setPaymentMethods(pms);
       setPaymentMethodForm({ name: '', number: '' });
-      alert('Nouveau moyen de de paiement enregistré.');
+      showToast('Nouveau moyen de de paiement enregistré. 💳', 'success');
     } catch (e: any) {
       console.error(e);
-      alert(e.message || "Erreur lors de l'enregistrement.");
+      showToast(e.message || "Erreur lors de l'enregistrement.", 'error');
     }
   };
 
@@ -747,6 +814,73 @@ export default function App() {
   return (
     <div className="max-w-[480px] mx-auto min-h-screen bg-[#070e20] text-gray-100 flex flex-col font-sans relative shadow-2xl border-x border-slate-800">
       
+      {/* Dynamic Toast Notifications */}
+      <div className="fixed top-5 left-1/2 -translate-x-1/2 z-[100] w-full max-w-[340px] flex flex-col gap-2.5 pointer-events-none px-4">
+        {toasts.map(toast => (
+          <div
+            key={toast.id}
+            className={`pointer-events-auto p-4 rounded-2xl shadow-2xl flex items-start gap-3 border text-xs text-white animate-fade-in transition-all duration-300 ${
+              toast.type === 'success' ? 'bg-[#0a2f1d]/95 border-emerald-500/35 text-emerald-100 shadow-emerald-500/5' :
+              toast.type === 'error' ? 'bg-[#3b1212]/95 border-rose-500/35 text-rose-100 shadow-rose-500/5' :
+              toast.type === 'warning' ? 'bg-[#3b2b0a]/95 border-amber-500/35 text-amber-100 shadow-amber-500/5' :
+              'bg-[#0d1b3a]/95 border-blue-500/35 text-blue-100 shadow-blue-500/5'
+            }`}
+          >
+            <div className="shrink-0 mt-0.5">
+              {toast.type === 'success' && <CheckCircle2 size={16} className="text-emerald-400" />}
+              {toast.type === 'error' && <XCircle size={16} className="text-rose-400" />}
+              {toast.type === 'warning' && <AlertTriangle size={16} className="text-amber-400" />}
+              {toast.type === 'info' && <Info size={16} className="text-blue-400" />}
+            </div>
+            <div className="flex-1 font-semibold leading-relaxed">
+              {toast.message}
+            </div>
+            <button
+              onClick={() => setToasts(prev => prev.filter(t => t.id !== toast.id))}
+              className="text-gray-400 hover:text-white shrink-0 p-0.5 rounded transition-colors"
+            >
+              <X size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      {/* CENTRAL INFORMATION MODAL (POP-UP overlay) */}
+      {config.popupEnabled && !isClientPopupDismissed && !isAdminMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+          <div className="bg-[#121b36] border border-cyan-500/30 rounded-3xl max-w-[360px] w-full p-6 relative shadow-2xl animate-scale-up">
+            <button
+              onClick={dismissClientPopup}
+              type="button"
+              className="absolute top-4 right-4 p-1.5 rounded-full bg-slate-800 hover:bg-slate-700 text-gray-400 hover:text-white transition-all cursor-pointer"
+              title="Fermer"
+            >
+              <X size={16} />
+            </button>
+
+            <div className="text-center mb-4">
+              <div className="mx-auto w-12 h-12 bg-cyan-500/10 text-cyan-400 rounded-full flex items-center justify-center mb-3 border border-cyan-500/25 shadow-lg shadow-cyan-500/10">
+                <Bell size={24} className="animate-bounce" />
+              </div>
+              <h3 className="text-base font-extrabold font-display text-gray-100">{config.popupTitle || 'Annonce Spéciale'}</h3>
+              <p className="text-[10px] text-gray-400 mt-0.5">Message de l'administration</p>
+            </div>
+
+            <div className="bg-slate-900/60 rounded-2xl p-4 border border-slate-800/80 text-center max-h-[180px] overflow-y-auto mb-5">
+              <p className="text-xs text-gray-200 leading-relaxed whitespace-pre-wrap">{config.popupMessage || 'Bienvenue sur la plateforme !'}</p>
+            </div>
+
+            <button
+              onClick={dismissClientPopup}
+              type="button"
+              className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold py-2.5 rounded-xl transition-all shadow-lg shadow-cyan-500/15 text-xs text-center cursor-pointer font-sans"
+            >
+              D'accord, j'ai compris
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* HEADER BAR */}
       <header className="px-5 py-4 bg-[#0d152c] border-b border-cyan-500/10 flex items-center justify-between sticky top-0 z-40 backdrop-blur-md">
         <div className="flex items-center gap-2">
@@ -1039,6 +1173,37 @@ export default function App() {
                         <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-bold">MFA Sécurisé</span>
                       </div>
                     </div>
+
+                    {/* Active Push notifications enabler banner */}
+                    {notificationPermission !== 'granted' && (
+                      <div className="bg-gradient-to-r from-purple-950/65 to-violet-950/55 border border-purple-500/25 rounded-3xl p-4 flex flex-col gap-3 text-xs shadow-xl animate-fade-in relative overflow-hidden">
+                        <div className="absolute -top-10 -right-10 w-24 h-24 bg-purple-500/10 rounded-full blur-xl pointer-events-none" />
+                        <div className="flex items-start gap-3">
+                          <div className="p-2.5 bg-purple-500/15 text-purple-400 rounded-2xl shrink-0 mt-0.5">
+                            <Bell size={18} className="animate-pulse" />
+                          </div>
+                          <div>
+                            <h4 className="font-extrabold font-display text-gray-100 text-xs">Activer les Notifications Push 📱</h4>
+                            <p className="text-gray-300 text-[10px] leading-relaxed mt-0.5">
+                              Soyez alerté en temps réel du traitement de vos dépôts, retraits et gains d'affiliation, ainsi que de nouveaux coupons, même si l'application est fermée.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2.5 items-center">
+                          {notificationPermission === 'denied' ? (
+                            <span className="text-[9px] text-amber-400 font-semibold italic">Bloqué. Activez les notifications dans les réglages de votre navigateur.</span>
+                          ) : (
+                            <button
+                              onClick={requestNotificationPermission}
+                              type="button"
+                              className="bg-purple-600 hover:bg-purple-500 text-white font-bold px-3.5 py-1.5 rounded-xl text-[10px] transition-all shadow-md shadow-purple-600/25 cursor-pointer"
+                            >
+                              Activer maintenant
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Affiliated referral program box */}
                     <div className="bg-gradient-to-tr from-[#121c3b] to-[#172754] border border-cyan-500/20 rounded-3xl p-5 relative overflow-hidden shadow-xl">
