@@ -444,7 +444,7 @@ export const dbService = {
           confidence: coupon.confidence,
           total_cote: coupon.totalCote,
           matches: coupon.matches,
-          status: 'pending',
+          status: coupon.status || 'pending',
           date: new Date().toLocaleDateString('fr-FR')
         })
         .eq('id', coupon.id);
@@ -457,7 +457,7 @@ export const dbService = {
       if (idx !== -1) {
         db.coupons[idx] = {
           ...coupon,
-          status: 'pending',
+          status: coupon.status || 'pending',
           date: new Date().toLocaleDateString('fr-FR')
         };
         saveLocalDB(db);

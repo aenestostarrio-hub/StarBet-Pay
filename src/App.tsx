@@ -163,7 +163,8 @@ export default function App() {
             homeTeam: m.homeTeam,
             awayTeam: m.awayTeam,
             prediction: m.prediction,
-            odd: m.odd
+            odd: m.odd,
+            status: m.status || 'pending'
           }))
         });
       }
@@ -320,13 +321,51 @@ export default function App() {
     };
   }, [user, transactions.length]);
 
-  // Handle generic clipboard copies
+  // Handle generic clipboard copies with robust iframe fallback support
   const handleCopyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedText(text);
-    setTimeout(() => {
-      setCopiedText(null);
-    }, 2000);
+    const performCopy = () => {
+      setCopiedText(text);
+      setTimeout(() => {
+        setCopiedText(null);
+      }, 2000);
+    };
+
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text)
+        .then(performCopy)
+        .catch(() => {
+          fallbackCopyText(text, performCopy);
+        });
+    } else {
+      fallbackCopyText(text, performCopy);
+    }
+  };
+
+  const fallbackCopyText = (text: string, onSuccess: () => void) => {
+    try {
+      const textArea = document.createElement("textarea");
+      textArea.value = text;
+      textArea.style.position = "fixed";
+      textArea.style.top = "0";
+      textArea.style.left = "0";
+      textArea.style.width = "2em";
+      textArea.style.height = "2em";
+      textArea.style.padding = "0";
+      textArea.style.border = "none";
+      textArea.style.outline = "none";
+      textArea.style.boxShadow = "none";
+      textArea.style.background = "transparent";
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const successful = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      if (successful) {
+        onSuccess();
+      }
+    } catch (err) {
+      console.warn('Fallback copy failed', err);
+    }
   };
 
   // Action: Register User Action
@@ -532,11 +571,11 @@ export default function App() {
     }
   };
 
-  // Action: Admin updates status of a transaction (Approve / Reject)
-  const handleAdminUpdateStatus = async (txId: string, status: 'validated' | 'rejected') => {
+  // Action: Admin updates status of a transaction (Approve / Reject / Reset)
+  const handleAdminUpdateStatus = async (txId: string, status: 'pending' | 'validated' | 'rejected') => {
     const reason = adminRejectedReason[txId] || '';
     if (status === 'rejected' && !reason.trim()) {
-      alert('Veuillez saisir un motif de rejet de la demande de l\'utilisateur.');
+      alert('Veuillez saisir un motif de rejet/annulation de la demande.');
       return;
     }
 
@@ -607,12 +646,14 @@ export default function App() {
         title: couponEditForm.title,
         confidence: couponEditForm.confidence,
         totalCote: Number(couponEditForm.totalCote),
+        status: couponEditForm.status || 'pending',
         matches: couponEditForm.matches.map((m, idx) => ({
           id: idx + 1,
           homeTeam: m.homeTeam.trim(),
           awayTeam: m.awayTeam.trim(),
           prediction: m.prediction.trim(),
-          odd: Number(m.odd)
+          odd: Number(m.odd),
+          status: m.status || 'pending'
         }))
       });
       setCoupons(updatedCoupons);
@@ -626,8 +667,8 @@ export default function App() {
   };
 
   // Action: Set active coupon result (won / lost / pending)
-  const handleSetCouponResult = async (status: 'won' | 'lost') => {
-    if (!window.confirm(`Voulez-vous vraiment déclarer ce coupon comme ${status === 'won' ? 'GAGNÉ (Validé)' : 'PERDU (Annulé)'} ? Cette action ajoutera le coupon à l'historique.`)) {
+  const handleSetCouponResult = async (status: 'won' | 'lost' | 'pending') => {
+    if (!window.confirm("Voulez-vous vraiment mettre à jour le statut de ce coupon ?")) {
       return;
     }
     setFormLoading(true);
@@ -635,7 +676,8 @@ export default function App() {
       const data = await dbService.setCouponResult(selectedCouponId, status);
       setCoupons(data.coupons);
       setPastCoupons(data.pastCoupons);
-      alert(`Le coupon a été déclaré ${status === 'won' ? 'GAGNÉ' : 'PERDU'} avec succès !`);
+      setCouponEditForm(prev => ({ ...prev, status }));
+      alert(`Le coupon a été enregistré à son nouvel état avec succès !`);
     } catch (e: any) {
       console.error(e);
       alert(e.message || "Erreur de connexion.");
@@ -1295,20 +1337,35 @@ export default function App() {
                         </p>
                       </div>
 
-                      {/* Global stats rate section */}
-                      <div className="bg-[#111a33] border border-cyan-500/20 rounded-2xl p-4 flex gap-3 relative overflow-hidden">
-                        <div className="text-cyan-400 bg-cyan-400/10 p-2.5 rounded-full h-fit shrink-0">
-                          <BarChart3 size={16} />
-                        </div>
-                        <div className="w-full">
-                          <div className="flex justify-between items-center">
-                            <h4 className="font-extrabold text-xs text-white">Taux de réussite global : {successRate}%</h4>
-                            <span className="text-[9px] text-gray-400 font-mono">{wonPastCount} validés / {totalPastCount} pronostics</span>
-                          </div>
-                          <p className="text-gray-300 text-[11px] leading-relaxed mt-1">
-                            Nos analystes mettent à jour les pronostics quotidiennement après étude minutieuse des équipes.
-                          </p>
-                        </div>
+                      {/* Category-specific stats segment */}
+                      <div className="grid grid-cols-3 gap-2 px-0.5">
+                        {[
+                          { id: 'secured', name: 'Côte 2 Sécurisé', color: 'cyan', rate: 92 },
+                          { id: 'medium', name: 'Côte 5 Médium', color: 'amber', rate: 82 },
+                          { id: 'bold', name: 'Côte 10 Audacieux', color: 'pink', rate: 75 }
+                        ].map((cat) => {
+                          const catPast = pastCoupons.filter(c => c.id.startsWith(cat.id) || (cat.id === 'secured' && c.totalCote < 3.5) || (cat.id === 'medium' && c.totalCote >= 3.5 && c.totalCote < 7.5) || (cat.id === 'bold' && c.totalCote >= 7.5));
+                          const total = catPast.length;
+                          const won = catPast.filter(c => c.status === 'won').length;
+                          const rateOfCat = total > 0 ? Math.round((won / total) * 100) : cat.rate;
+
+                          return (
+                            <div key={cat.id} className="bg-[#111a33]/80 border border-slate-800 rounded-2xl p-2.5 flex flex-col justify-between hover:border-slate-700 transition-all shadow-lg">
+                              <div>
+                                <span className={`text-[8px] font-black uppercase tracking-wider ${
+                                  cat.id === 'secured' ? 'text-cyan-400' : cat.id === 'medium' ? 'text-amber-400' : 'text-pink-400'
+                                }`}>
+                                  {cat.name}
+                                </span>
+                                <div className="text-lg font-mono font-black text-white mt-1">{rateOfCat}%</div>
+                                <span className="text-[8px] text-gray-500 block">Réussite</span>
+                              </div>
+                              <span className="text-[8px] font-semibold text-gray-400 mt-2 font-mono bg-black/30 py-0.5 px-1.5 rounded text-center block w-full whitespace-nowrap">
+                                {won} Gagnés / {total} Total
+                              </span>
+                            </div>
+                          );
+                        })}
                       </div>
 
                       {/* Coupons du Jour list */}
@@ -1395,7 +1452,15 @@ export default function App() {
                                       <div className="flex-1">
                                         <div className="flex justify-between text-gray-100 font-semibold text-[11px]">
                                           <span>{item.homeTeam} vs {item.awayTeam}</span>
-                                          <span className="text-gray-400 font-mono text-[10px]">Cote: {item.odd.toFixed(2)}</span>
+                                          <div className="flex items-center gap-1.5 font-mono text-[10px]">
+                                            <span className="text-gray-400">Cote: {item.odd.toFixed(2)}</span>
+                                            {item.status === 'won' && (
+                                              <span className="text-[8px] bg-emerald-500/15 border border-emerald-500/20 text-emerald-400 font-bold px-1 py-[1px] rounded font-sans">✓ GAGNÉ</span>
+                                            )}
+                                            {item.status === 'lost' && (
+                                              <span className="text-[8px] bg-red-500/15 border border-red-500/20 text-red-400 font-bold px-1 py-[1px] rounded font-sans">✗ PERDU</span>
+                                            )}
+                                          </div>
                                         </div>
                                         <p className="text-gray-400 text-[10px] italic mt-0.5">{item.prediction}</p>
                                       </div>
@@ -1441,9 +1506,13 @@ export default function App() {
                                 </div>
                                 <div className="space-y-1.5 opacity-80">
                                   {coup.matches.map((item, matchIdx) => (
-                                    <div key={matchIdx} className="flex justify-between text-[10px]">
+                                    <div key={matchIdx} className="flex justify-between items-center text-[10px]">
                                       <span className="text-gray-300">{item.homeTeam} vs {item.awayTeam}</span>
-                                      <span className="text-gray-400 italic">{item.prediction} (Cote : {item.odd.toFixed(2)})</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="text-gray-400 italic">{item.prediction} (Cote : {item.odd.toFixed(2)})</span>
+                                        {item.status === 'won' && <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1 rounded">✓</span>}
+                                        {item.status === 'lost' && <span className="text-[8px] text-red-500 font-bold bg-red-500/10 px-1 rounded font-sans">✗</span>}
+                                      </div>
                                     </div>
                                   ))}
                                 </div>
@@ -1753,9 +1822,16 @@ export default function App() {
                                 <span className="font-mono text-yellow-400 font-bold">{tx.xbetAccount}</span>
                                 <button 
                                   onClick={() => handleCopyToClipboard(tx.xbetAccount)}
-                                  className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-705 rounded"
+                                  className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
                                 >
-                                  Copier
+                                  {copiedText === tx.xbetAccount ? (
+                                    <>
+                                      <Check size={10} className="text-emerald-400" />
+                                      <span className="text-emerald-400">Copié !</span>
+                                    </>
+                                  ) : (
+                                    'Copier'
+                                  )}
                                 </button>
                               </div>
                             </div>
@@ -1788,40 +1864,85 @@ export default function App() {
                           )}
 
                           {/* Approval Controls */}
-                          {tx.status === 'pending' && (
-                            <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
-                              <input 
-                                type="text" 
-                                placeholder="Motif du rejet (Obligatoire pour annuler)"
-                                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                                value={adminRejectedReason[tx.id] || ''}
-                                onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                  className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-400 text-xs font-bold rounded-xl"
-                                >
-                                  Annuler la validation
-                                </button>
-                                <button
-                                  onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                  className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md"
-                                >
-                                  Valider l'opération
-                                </button>
+                          <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
+                            {tx.status === 'pending' && (
+                              <div className="space-y-2.5">
+                                <input 
+                                  type="text" 
+                                  placeholder="Motif du rejet (Obligatoire pour annuler)"
+                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                  value={adminRejectedReason[tx.id] || ''}
+                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                    className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-400 text-xs font-bold rounded-xl transition-all"
+                                  >
+                                    Annuler / Refuser
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                    className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                  >
+                                    Valider le dépôt
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )}
 
-                          {tx.status === 'validated' && (
-                            <button
-                              onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                              className="w-full py-1.5 border border-slate-800 hover:border-slate-700 text-xs text-red-500 font-semibold rounded-xl"
-                            >
-                              Annuler de force
-                            </button>
-                          )}
+                            {tx.status === 'validated' && (
+                              <div className="space-y-2.5">
+                                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
+                                  ✓ Opération Validée
+                                </span>
+                                <input 
+                                  type="text" 
+                                  placeholder="Motif d'annulation de force (Saisir si vous annulez)"
+                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                  value={adminRejectedReason[tx.id] || ''}
+                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                    title="Remettre cette opération à l'état en attente de vérification"
+                                  >
+                                    Remettre En attente
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                    className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
+                                  >
+                                    Annuler de force
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {tx.status === 'rejected' && (
+                              <div className="space-y-2.5">
+                                <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
+                                  ✗ Opération Annulée / Rejetée
+                                </span>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                  >
+                                    Remettre En attente
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                    className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                  >
+                                    Rétablir et Valider
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))
                     )}
@@ -1865,9 +1986,16 @@ export default function App() {
                                   <span className="font-mono text-[#00f0ff] font-black">{tx.withdrawCode}</span>
                                   <button 
                                     onClick={() => handleCopyToClipboard(tx.withdrawCode || '')}
-                                    className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-705 rounded"
+                                    className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
                                   >
-                                    Copier
+                                    {copiedText === tx.withdrawCode ? (
+                                      <>
+                                        <Check size={10} className="text-emerald-400" />
+                                        <span className="text-emerald-400">Copié !</span>
+                                      </>
+                                    ) : (
+                                      'Copier'
+                                    )}
                                   </button>
                                 </div>
                               </div>
@@ -1882,31 +2010,85 @@ export default function App() {
                           )}
 
                           {/* Approval Controls */}
-                          {tx.status === 'pending' && (
-                            <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
-                              <input 
-                                type="text" 
-                                placeholder="Motif du rejet (Obligatoire pour annuler)"
-                                className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                                value={adminRejectedReason[tx.id] || ''}
-                                onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
-                              />
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                  className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-500 text-xs font-bold rounded-xl"
-                                >
-                                  Annuler la validation
-                                </button>
-                                <button
-                                  onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                  className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md"
-                                >
-                                  Valider l'opération
-                                </button>
+                          <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
+                            {tx.status === 'pending' && (
+                              <div className="space-y-2.5">
+                                <input 
+                                  type="text" 
+                                  placeholder="Motif du rejet (Obligatoire pour annuler)"
+                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                  value={adminRejectedReason[tx.id] || ''}
+                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                    className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-500 text-xs font-bold rounded-xl transition-all"
+                                  >
+                                    Annuler / Refuser
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                    className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                  >
+                                    Valider le retrait
+                                  </button>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            )}
+
+                            {tx.status === 'validated' && (
+                              <div className="space-y-2.5">
+                                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
+                                  ✓ Retrait Validé
+                                </span>
+                                <input 
+                                  type="text" 
+                                  placeholder="Motif d'annulation de force (Saisir si vous annulez)"
+                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                  value={adminRejectedReason[tx.id] || ''}
+                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                />
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                    title="Remettre cette opération à l'état en attente de vérification"
+                                  >
+                                    Remettre En attente
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                    className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-00 font-bold rounded-xl transition-all"
+                                  >
+                                    Annuler de force
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+
+                            {tx.status === 'rejected' && (
+                              <div className="space-y-2.5">
+                                <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
+                                  ✗ Retrait Annulé / Rejeté
+                                </span>
+                                <div className="flex gap-2">
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                  >
+                                    Remettre En attente
+                                  </button>
+                                  <button
+                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                    className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                  >
+                                    Rétablir et Valider
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ))
                     )}
@@ -2044,29 +2226,48 @@ export default function App() {
 
                       {/* Results scoring configuration block */}
                       <div className="bg-[#111a33] border border-yellow-500/20 rounded-3xl p-5 space-y-3">
-                        <h4 className="text-xs font-extrabold uppercase text-yellow-400 flex items-center gap-1.5">
-                          <CheckCircle2 size={14} />
-                          Valider le résultat de ce coupon
-                        </h4>
+                        <div className="flex justify-between items-center pb-1 border-b border-slate-800">
+                          <h4 className="text-xs font-extrabold uppercase text-yellow-400 flex items-center gap-1.5">
+                            <CheckCircle2 size={14} />
+                            Valider le résultat de ce coupon
+                          </h4>
+                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                            couponEditForm.status === 'won' 
+                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                              : couponEditForm.status === 'lost' 
+                              ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
+                              : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
+                          }`}>
+                            {couponEditForm.status === 'won' ? '✓ GAGNÉ' : couponEditForm.status === 'lost' ? '✗ PERDU' : '⏳ EN COURS'}
+                          </span>
+                        </div>
                         <p className="text-[11px] text-gray-300 leading-relaxed">
-                          Marquez ce coupon comme GAGNÉ ou PERDU pour l'ajouter à l'historique et recalculer le taux de réussite.
+                          Marquez ce coupon comme GAGNÉ, PERDU ou en cours pour adapter l'historique et les statistiques d'accès.
                         </p>
-                        <div className="flex gap-3">
+                        <div className="grid grid-cols-3 gap-2">
                           <button
                             type="button"
                             onClick={() => handleSetCouponResult('won')}
-                            className="flex-1 py-3 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5"
+                            className="py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
                           >
-                            <CheckCircle2 size={14} />
-                            Déclarant GAGNÉ ✓
+                            <CheckCircle2 size={12} />
+                            GAGNÉ ✓
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSetCouponResult('pending')}
+                            className="py-2.5 bg-slate-800 hover:bg-slate-700 text-gray-300 border border-slate-700 font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
+                          >
+                            <RefreshCw size={12} />
+                            EN COURS
                           </button>
                           <button
                             type="button"
                             onClick={() => handleSetCouponResult('lost')}
-                            className="flex-1 py-3 bg-red-500 hover:bg-red-400 text-white font-black text-xs rounded-xl transition-all shadow-md flex items-center justify-center gap-1.5"
+                            className="py-2.5 bg-red-500 hover:bg-red-400 text-white font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
                           >
-                            <AlertTriangle size={14} />
-                            Déclarant PERDU ✗
+                            <AlertTriangle size={12} />
+                            PERDU ✗
                           </button>
                         </div>
                       </div>
@@ -2183,14 +2384,14 @@ export default function App() {
                                   </div>
 
                                   <div className="grid grid-cols-3 gap-2">
-                                    <div className="col-span-2">
+                                    <div>
                                       <label className="block text-gray-500 text-[9px] uppercase mb-0.5">Pronostic proposé</label>
                                       <input
                                         type="text"
                                         placeholder="Ex: Vainqueur Real (1)"
                                         value={match.prediction}
                                         onChange={(e) => updateMatchRow(idx, 'prediction', e.target.value)}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
+                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-semibold"
                                         required
                                       />
                                     </div>
@@ -2201,10 +2402,28 @@ export default function App() {
                                         step="0.01"
                                         placeholder="1.50"
                                         value={match.odd}
-                                        onChange={(e) => updateMatchRow(idx, 'odd', e.target.value)}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
+                                        onChange={(e) => updateMatchRow(idx, 'odd', Number(e.target.value))}
+                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-mono"
                                         required
                                       />
+                                    </div>
+                                    <div>
+                                      <label className="block text-cyan-400 text-[9px] uppercase mb-0.5 font-bold">État Match</label>
+                                      <select
+                                        value={match.status || 'pending'}
+                                        onChange={(e) => updateMatchRow(idx, 'status', e.target.value)}
+                                        className={`w-full bg-slate-900 border rounded-lg px-2 py-1 text-[11px] font-bold ${
+                                          match.status === 'won' 
+                                            ? 'border-emerald-500/45 text-emerald-400' 
+                                            : match.status === 'lost' 
+                                            ? 'border-red-500/45 text-red-500' 
+                                            : 'border-slate-800 text-gray-300'
+                                        }`}
+                                      >
+                                        <option value="pending">⏳ En cours</option>
+                                        <option value="won">✓ Gagné</option>
+                                        <option value="lost">✗ Perdu</option>
+                                      </select>
                                     </div>
                                   </div>
                                 </div>

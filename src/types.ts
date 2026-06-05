@@ -49,6 +49,7 @@ export interface PronoMatch {
   prediction: string;
   odd: number;
   id: number;
+  status?: 'pending' | 'won' | 'lost';
 }
 
 export interface SportCoupon {
