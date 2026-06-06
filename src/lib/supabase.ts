@@ -101,32 +101,21 @@ const initialLocalDB: DBState = {
       title: 'COUPON SÉCURISÉ (COTE ~2)',
       confidence: 'ÉLEVÉ',
       totalCote: 2.00,
-      matches: [
-        { id: 1, homeTeam: 'France', awayTeam: 'Chili', prediction: 'Prono : Victoire de la France', odd: 1.45 },
-        { id: 2, homeTeam: 'Portugal', awayTeam: 'République d\'Irlande', prediction: 'Prono : Victoire du Portugal', odd: 1.38 }
-      ]
+      matches: []
     },
     {
       id: 'medium',
       title: 'COUPON INTERMÉDIAIRE (COTE ~5)',
       confidence: 'MOYEN',
-      totalCote: 4.91,
-      matches: [
-        { id: 1, homeTeam: 'Angleterre', awayTeam: 'Belgique', prediction: 'Prono : Les deux équipes marquent : Oui', odd: 1.75 },
-        { id: 2, homeTeam: 'Espagne', awayTeam: 'Colombie', prediction: 'Prono : Victoire de l\'Espagne', odd: 1.65 },
-        { id: 3, homeTeam: 'Allemagne', awayTeam: 'Pologne', prediction: 'Prono : Victoire de l\'Allemagne et Plus de 1.5 buts', odd: 1.70 }
-      ]
+      totalCote: 5.00,
+      matches: []
     },
     {
       id: 'bold',
       title: 'COUPON AUDACIEUX (COTE ~10)',
       confidence: 'RISQUE ÉLEVÉ',
-      totalCote: 9.94,
-      matches: [
-        { id: 1, homeTeam: 'Argentine', awayTeam: 'Équateur', prediction: 'Prono : Victoire de l\'Argentine', odd: 1.50 },
-        { id: 2, homeTeam: 'Angleterre', awayTeam: 'Belgique', prediction: 'Prono : Match nul', odd: 3.40 },
-        { id: 3, homeTeam: 'Espagne', awayTeam: 'Colombie', prediction: 'Prono : Les deux équipes marquent : Oui', odd: 1.95 }
-      ]
+      totalCote: 10.00,
+      matches: []
     }
   ],
   couponHistory: [],
@@ -143,6 +132,54 @@ function getLocalDB(): DBState {
   try {
     const parsed = JSON.parse(data) as DBState;
     if (!parsed.pastCoupons) parsed.pastCoupons = [];
+    
+    // Clean old/legacy sandbox coupons whose date isn't today
+    const normalizeToISODate = (dateStr?: string): string => {
+      if (!dateStr) return '';
+      const firstPart = dateStr.trim().split(' ')[0];
+      if (firstPart.includes('/')) {
+        const parts = firstPart.split('/');
+        if (parts.length === 3) {
+          let day = parts[0];
+          let month = parts[1];
+          let year = parts[2];
+          if (year.length === 2) year = '20' + year;
+          day = day.padStart(2, '0');
+          month = month.padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        }
+      }
+      try {
+        const d = new Date(dateStr || '');
+        if (!isNaN(d.getTime())) {
+          const year = d.getFullYear();
+          const month = String(d.getMonth() + 1).padStart(2, '0');
+          const day = String(d.getDate()).padStart(2, '0');
+          return `${year}-${month}-${day}`;
+        }
+      } catch (e) {}
+      return firstPart;
+    };
+
+    const todayObj = new Date();
+    const todayYear = todayObj.getFullYear();
+    const todayMonth = String(todayObj.getMonth() + 1).padStart(2, '0');
+    const todayDay = String(todayObj.getDate()).padStart(2, '0');
+    const normalizedToday = `${todayYear}-${todayMonth}-${todayDay}`;
+
+    if (parsed.coupons) {
+      parsed.coupons.forEach(c => {
+        if (!c.date) {
+          c.matches = [];
+        } else {
+          const cleanCouponDate = normalizeToISODate(c.date);
+          if (cleanCouponDate !== normalizedToday) {
+            c.matches = [];
+          }
+        }
+      });
+    }
+    
     return parsed;
   } catch (e) {
     return initialLocalDB;
@@ -657,6 +694,98 @@ export const dbService = {
       } catch (e) {
         useLocalStorageSandbox = true;
         return this.clearHistory();
+      }
+    }
+  },
+
+  async addPastCoupon(coupon: SportCoupon): Promise<SportCoupon[]> {
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from('sb_past_coupons')
+        .insert({
+          id: coupon.id || `past_${Date.now()}`,
+          title: coupon.title,
+          confidence: coupon.confidence,
+          total_cote: coupon.totalCote,
+          matches: coupon.matches,
+          status: coupon.status || 'pending',
+          date: coupon.date || new Date().toLocaleDateString('fr-FR')
+        });
+      if (error) throw error;
+      return this.getPastCoupons();
+    } else if (useLocalStorageSandbox) {
+      const db = getLocalDB();
+      if (!db.pastCoupons) db.pastCoupons = [];
+      db.pastCoupons.unshift({
+        ...coupon,
+        id: coupon.id || `past_${Date.now()}`,
+        date: coupon.date || new Date().toLocaleDateString('fr-FR')
+      });
+      saveLocalDB(db);
+      return db.pastCoupons;
+    } else {
+      try {
+        const res = await customFetch('/api/coupons/history/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(coupon)
+        });
+        const data = await res.json();
+        if (data && data.error === "STANDALONE_FALLBACK") {
+          useLocalStorageSandbox = true;
+          return this.addPastCoupon(coupon);
+        }
+        return data.pastCoupons;
+      } catch (e) {
+        useLocalStorageSandbox = true;
+        return this.addPastCoupon(coupon);
+      }
+    }
+  },
+
+  async updatePastCoupon(coupon: SportCoupon): Promise<SportCoupon[]> {
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from('sb_past_coupons')
+        .update({
+          title: coupon.title,
+          confidence: coupon.confidence,
+          total_cote: coupon.totalCote,
+          matches: coupon.matches,
+          status: coupon.status || 'pending',
+          date: coupon.date || new Date().toLocaleDateString('fr-FR')
+        })
+        .eq('id', coupon.id);
+      if (error) throw error;
+      return this.getPastCoupons();
+    } else if (useLocalStorageSandbox) {
+      const db = getLocalDB();
+      if (!db.pastCoupons) db.pastCoupons = [];
+      const idx = db.pastCoupons.findIndex(c => c.id === coupon.id);
+      if (idx !== -1) {
+        db.pastCoupons[idx] = {
+          ...db.pastCoupons[idx],
+          ...coupon
+        };
+        saveLocalDB(db);
+      }
+      return db.pastCoupons;
+    } else {
+      try {
+        const res = await customFetch('/api/coupons/history/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(coupon)
+        });
+        const data = await res.json();
+        if (data && data.error === "STANDALONE_FALLBACK") {
+          useLocalStorageSandbox = true;
+          return this.updatePastCoupon(coupon);
+        }
+        return data.pastCoupons;
+      } catch (e) {
+        useLocalStorageSandbox = true;
+        return this.updatePastCoupon(coupon);
       }
     }
   },

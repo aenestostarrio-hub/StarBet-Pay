@@ -2,7 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
-  PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert
+  PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
+  Edit, Calendar
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
@@ -201,42 +202,53 @@ export default function App() {
   });
 
   const [pastCoupons, setPastCoupons] = useState<SportCoupon[]>([]);
-  const [selectedCouponId, setSelectedCouponId] = useState<string>('secured');
+  const [selectedCouponId, setSelectedCouponId] = useState<string>(''); // Default empty to open creator on demand
+  const [editingPastCoupon, setEditingPastCoupon] = useState<SportCoupon | null>(null); // For history editing flow
   const [couponEditForm, setCouponEditForm] = useState<{
     id: string;
     title: string;
     confidence: 'ÉLEVÉ' | 'MOYEN' | 'RISQUE ÉLEVÉ';
     totalCote: number;
-    matches: { homeTeam: string; awayTeam: string; prediction: string; odd: number }[];
+    matches: { homeTeam: string; awayTeam: string; prediction: string; odd: number; status?: 'pending' | 'won' | 'lost' }[];
+    status?: 'pending' | 'won' | 'lost';
   }>({
-    id: 'secured',
+    id: '',
     title: '',
     confidence: 'ÉLEVÉ',
     totalCote: 2.0,
     matches: []
   });
 
-  // Load selected active coupon into edit form
-  useEffect(() => {
-    if (coupons && coupons.length > 0) {
-      const activeCoup = coupons.find(c => c.id === selectedCouponId);
-      if (activeCoup) {
-        setCouponEditForm({
-          id: activeCoup.id,
-          title: activeCoup.title,
-          confidence: activeCoup.confidence,
-          totalCote: activeCoup.totalCote,
-          matches: activeCoup.matches.map(m => ({
-            homeTeam: m.homeTeam,
-            awayTeam: m.awayTeam,
-            prediction: m.prediction,
-            odd: m.odd,
-            status: m.status || 'pending'
-          }))
-        });
-      }
+  // Action: Triggered when admin chooses a cote caliber they want to create
+  const handleSelectCouponToCreate = (id: string) => {
+    setSelectedCouponId(id);
+    let title = '';
+    let confidence: 'ÉLEVÉ' | 'MOYEN' | 'RISQUE ÉLEVÉ' = 'ÉLEVÉ';
+    let totalCote = 2.00;
+
+    if (id === 'secured') {
+      title = 'COUPON COTE 2 SÉCURISÉ 🌟';
+      confidence = 'ÉLEVÉ';
+      totalCote = 2.00;
+    } else if (id === 'medium') {
+      title = 'COUPON COTE 5 MÉDIUM ⚡';
+      confidence = 'MOYEN';
+      totalCote = 5.00;
+    } else if (id === 'bold') {
+      title = 'COUPON COTE 10 AUDACIEUX 🔥';
+      confidence = 'RISQUE ÉLEVÉ';
+      totalCote = 10.00;
     }
-  }, [selectedCouponId, coupons]);
+
+    setCouponEditForm({
+      id,
+      title,
+      confidence,
+      totalCote,
+      matches: [], // starts clean with zero events
+      status: 'pending'
+    });
+  };
 
   // Fetch general app configurations
   const fetchAppConfigAndData = async () => {
@@ -492,6 +504,11 @@ export default function App() {
       setUser(userData);
       localStorage.setItem('starbetpay_user', JSON.stringify(userData));
       setTempUser(null);
+      // Reset popup view state so it shows up beautifully on login
+      try {
+        sessionStorage.removeItem('starbetpay_popup_dismissed');
+      } catch {}
+      setIsClientPopupDismissed(false);
     } catch (e: any) {
       setAuthError(e.message || 'Code MFA incorrect ou expiré. Veillez utiliser le code de démo.');
     }
@@ -504,6 +521,11 @@ export default function App() {
     setIsAdminMode(false);
     setActiveTab('home');
     setTempUser(null);
+    // Reset popup view state on logout
+    try {
+      sessionStorage.removeItem('starbetpay_popup_dismissed');
+    } catch {}
+    setIsClientPopupDismissed(false);
   };
 
   // Action: Handle Screenshot receipt conversion
@@ -703,19 +725,87 @@ export default function App() {
     }
   };
 
-  // Action: Admin registers manual coupon updates (title, confidence, totalCote, match rows)
+  // Action: Admin registers manual coupon updates (publishes daily active AND saves directly to history)
   const handleSaveManualCoupon = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!couponEditForm.id) {
+      showToast("Veuillez sélectionner le coupon à créer d'abord.", "warning");
+      return;
+    }
+    if (couponEditForm.matches.length === 0) {
+      showToast("Veuillez ajouter au moins un match/événement à votre coupon.", "warning");
+      return;
+    }
+
     setFormLoading(true);
     try {
+      const formattedMatches = couponEditForm.matches.map((m, idx) => ({
+        id: idx + 1,
+        homeTeam: m.homeTeam.trim(),
+        awayTeam: m.awayTeam.trim(),
+        prediction: m.prediction.trim(),
+        odd: Number(m.odd),
+        status: m.status || 'pending'
+      }));
+
+      // 1. Update the live active daily coupon so users can access/purchase it
       const updatedCoupons = await dbService.updateCoupon({
         id: couponEditForm.id,
-        title: couponEditForm.title,
+        title: couponEditForm.title.trim(),
         confidence: couponEditForm.confidence,
         totalCote: Number(couponEditForm.totalCote),
         status: couponEditForm.status || 'pending',
-        matches: couponEditForm.matches.map((m, idx) => ({
-          id: idx + 1,
+        matches: formattedMatches
+      });
+      setCoupons(updatedCoupons);
+
+      // 2. Automatically create and append a copy of this coupon straight to the archives with today's date
+      const todayString = new Date().toLocaleDateString('fr-FR');
+      const uniqueHistoryId = `${couponEditForm.id}_${Date.now()}`;
+      
+      const updatedHistory = await dbService.addPastCoupon({
+        id: uniqueHistoryId,
+        title: couponEditForm.title.trim(),
+        confidence: couponEditForm.confidence,
+        totalCote: Number(couponEditForm.totalCote),
+        status: couponEditForm.status || 'pending',
+        matches: formattedMatches,
+        date: todayString
+      });
+      setPastCoupons(updatedHistory);
+
+      // 3. Reset form fields completely to pristine empty state as requested
+      setCouponEditForm({
+        id: '',
+        title: '',
+        confidence: 'ÉLEVÉ',
+        totalCote: 2.0,
+        matches: [],
+        status: 'pending'
+      });
+      setSelectedCouponId(''); // Deselect creator level
+
+      showToast("Le coupon a été créé, publié, et enregistré dans les archives d'historique ! 🌟", "success");
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.message || "Erreur lors de l'enregistrement du coupon.", "error");
+    } finally {
+      setFormLoading(false);
+    }
+  };
+
+  // Action: Admin saves updates made to a historical/archived coupon
+  const handleSaveEditedPastCoupon = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingPastCoupon) return;
+    setFormLoading(true);
+    try {
+      const updatedHistory = await dbService.updatePastCoupon({
+        ...editingPastCoupon,
+        title: editingPastCoupon.title.trim(),
+        totalCote: Number(editingPastCoupon.totalCote),
+        matches: editingPastCoupon.matches.map((m, idx) => ({
+          ...m,
           homeTeam: m.homeTeam.trim(),
           awayTeam: m.awayTeam.trim(),
           prediction: m.prediction.trim(),
@@ -723,11 +813,12 @@ export default function App() {
           status: m.status || 'pending'
         }))
       });
-      setCoupons(updatedCoupons);
-      alert("Le coupon a été enregistré et publié avec succès !");
-    } catch (e: any) {
-      console.error(e);
-      alert(e.message || "Erreur lors de l'enregistrement du coupon.");
+      setPastCoupons(updatedHistory);
+      setEditingPastCoupon(null);
+      showToast("Coupon d'historique modifié et enregistré avec succès ! 💾", "success");
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.message || "Erreur lors de l'enregistrement de l'historique.", "error");
     } finally {
       setFormLoading(false);
     }
@@ -735,6 +826,10 @@ export default function App() {
 
   // Action: Set active coupon result (won / lost / pending)
   const handleSetCouponResult = async (status: 'won' | 'lost' | 'pending') => {
+    if (!selectedCouponId) {
+      showToast("Sélectionnez d'abord un coupon", "warning");
+      return;
+    }
     if (!window.confirm("Voulez-vous vraiment mettre à jour le statut de ce coupon ?")) {
       return;
     }
@@ -744,10 +839,10 @@ export default function App() {
       setCoupons(data.coupons);
       setPastCoupons(data.pastCoupons);
       setCouponEditForm(prev => ({ ...prev, status }));
-      alert(`Le coupon a été enregistré à son nouvel état avec succès !`);
+      showToast("Le coupon a été enregistré à son nouvel état avec succès ! ✅", "success");
     } catch (e: any) {
       console.error(e);
-      alert(e.message || "Erreur de connexion.");
+      showToast(e.message || "Erreur de connexion.", "error");
     } finally {
       setFormLoading(false);
     }
@@ -846,8 +941,8 @@ export default function App() {
       </div>
 
       {/* CENTRAL INFORMATION MODAL (POP-UP overlay) */}
-      {config.popupEnabled && !isClientPopupDismissed && !isAdminMode && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/85 backdrop-blur-md animate-fade-in">
+      {config.popupEnabled && user && activeTab === 'home' && !isClientPopupDismissed && !isAdminMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-[#070b19]/50 backdrop-blur-sm animate-fade-in">
           <div className="bg-[#121b36] border border-cyan-500/30 rounded-3xl max-w-[360px] w-full p-6 relative shadow-2xl animate-scale-up">
             <button
               onClick={dismissClientPopup}
@@ -1478,9 +1573,45 @@ export default function App() {
 
                 {/* 3. PRONOS TAB */}
                 {activeTab === 'pronos' && (() => {
-                  const todayStr = new Date().toLocaleDateString('fr-FR');
+                  const normalizeToISODate = (dateStr?: string): string => {
+                    if (!dateStr) return '';
+                    const firstPart = dateStr.trim().split(' ')[0];
+                    if (firstPart.includes('/')) {
+                      const parts = firstPart.split('/');
+                      if (parts.length === 3) {
+                        let day = parts[0];
+                        let month = parts[1];
+                        let year = parts[2];
+                        if (year.length === 2) year = '20' + year;
+                        day = day.padStart(2, '0');
+                        month = month.padStart(2, '0');
+                        return `${year}-${month}-${day}`;
+                      }
+                    }
+                    try {
+                      const d = new Date(dateStr || '');
+                      if (!isNaN(d.getTime())) {
+                        const year = d.getFullYear();
+                        const month = String(d.getMonth() + 1).padStart(2, '0');
+                        const day = String(d.getDate()).padStart(2, '0');
+                        return `${year}-${month}-${day}`;
+                      }
+                    } catch (e) {}
+                    return firstPart;
+                  };
+
+                  const todayObj = new Date();
+                  const todayYear = todayObj.getFullYear();
+                  const todayMonth = String(todayObj.getMonth() + 1).padStart(2, '0');
+                  const todayDay = String(todayObj.getDate()).padStart(2, '0');
+                  const normalizedToday = `${todayYear}-${todayMonth}-${todayDay}`;
+
                   const userTodayDeposits = transactions
-                    .filter(t => t.type === 'deposit' && t.status === 'validated' && t.date?.includes(todayStr))
+                    .filter(t => {
+                      if (t.type !== 'deposit' || t.status !== 'validated') return false;
+                      const txDate = normalizeToISODate(t.date);
+                      return txDate === normalizedToday;
+                    })
                     .reduce((sum, t) => sum + t.amount, 0);
 
                   const hasPremiumAccess = userTodayDeposits >= 1000 || user?.role === 'admin';
@@ -1488,6 +1619,21 @@ export default function App() {
                   const totalPastCount = pastCoupons.length;
                   const wonPastCount = pastCoupons.filter(c => c.status === 'won').length;
                   const successRate = totalPastCount > 0 ? Math.round((wonPastCount / totalPastCount) * 100) : 85;
+
+                  // Order coupons so Cote 2 (secured) is on top, then Cote 5 (medium), then Cote 10 (bold)
+                  const sortOrder = { 'secured': 1, 'medium': 2, 'bold': 3 };
+                  const sortedCoupons = [...coupons].sort((a, b) => {
+                    const orderA = sortOrder[a.id as keyof typeof sortOrder] || 99;
+                    const orderB = sortOrder[b.id as keyof typeof sortOrder] || 99;
+                    return orderA - orderB;
+                  });
+
+                  const availableCoupons = sortedCoupons.filter(c => {
+                    if (!c.matches || c.matches.length === 0) return false;
+                    if (!c.date) return false;
+                    const normalizedCouponDate = normalizeToISODate(c.date);
+                    return normalizedCouponDate === normalizedToday;
+                  });
 
                   return (
                     <div className="space-y-5 animate-fade-in">
@@ -1540,12 +1686,20 @@ export default function App() {
                           <span className="text-[10px] text-cyan-400 font-bold bg-[#111a33] px-2 py-0.5 rounded border border-slate-800">Cote 2 public • Côte 5 & 10 privés</span>
                         </div>
 
-                        {coupons.length === 0 ? (
-                          <div className="text-center py-8 text-gray-400 text-xs border border-dashed border-slate-800 rounded-2xl">
-                            Aucun coupon publié pour aujourd'hui.
+                        {availableCoupons.length === 0 ? (
+                          <div className="bg-[#111a33]/90 border border-cyan-500/20 rounded-3xl p-8 text-center shadow-2xl relative overflow-hidden animate-fade-in max-w-sm mx-auto">
+                            <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-3xl"></div>
+                            <div className="absolute bottom-0 left-0 w-32 h-32 bg-[#00f0ff]/5 rounded-full blur-3xl"></div>
+                            <div className="w-12 h-12 bg-cyan-500/10 rounded-full flex items-center justify-center text-cyan-400 mx-auto mb-4 border border-cyan-500/20 shadow-inner">
+                              <Bell size={20} className="animate-pulse" />
+                            </div>
+                            <h4 className="text-white font-extrabold text-xs uppercase tracking-wider font-display">Coupons du jour indisponibles</h4>
+                            <p className="text-gray-300 text-[11px] leading-relaxed max-w-xs mx-auto mt-2 font-sans">
+                              Les coupons de la journée seront disponibles dans un instant. Veuillez patienter, vous serez notifié une fois publiés.
+                            </p>
                           </div>
                         ) : (
-                          coupons.map((coupon) => {
+                          availableCoupons.map((coupon) => {
                             const isPremium = coupon.id !== 'secured';
                             const isLocked = isPremium && !hasPremiumAccess;
 
@@ -1663,9 +1817,11 @@ export default function App() {
                                     <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
                                       coup.status === 'won' 
                                         ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
-                                        : 'bg-red-500/15 text-red-400 border border-red-500/25'
+                                        : coup.status === 'lost'
+                                          ? 'bg-red-500/15 text-red-500 border border-red-500/25'
+                                          : 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/25 font-black uppercase'
                                     }`}>
-                                      {coup.status === 'won' ? 'GAGNÉ' : 'PERDU'}
+                                      {coup.status === 'won' ? 'GAGNÉ ✓' : coup.status === 'lost' ? 'PERDU ✗' : 'EN COURS ⏳'}
                                     </span>
                                   </div>
                                 </div>
@@ -2314,7 +2470,7 @@ export default function App() {
                   const addMatchRow = () => {
                     setCouponEditForm(prev => ({
                       ...prev,
-                      matches: [...prev.matches, { homeTeam: '', awayTeam: '', prediction: '', odd: 1.5 }]
+                      matches: [...prev.matches, { homeTeam: '', awayTeam: '', prediction: '', odd: 1.5, status: 'pending' }]
                     }));
                   };
 
@@ -2351,280 +2507,300 @@ export default function App() {
                             <TrendingUp size={18} />
                           </span>
                           <div>
-                            <h4 className="text-sm font-bold text-white">Gestionnaire de Pronostics Sportifs</h4>
-                            <p className="text-[10px] text-gray-400">Modifiez les coupons du jour et validez les résultats après le match.</p>
+                            <h4 className="text-sm font-bold text-white">Créateur et Validation de Coupons</h4>
+                            <p className="text-[10px] text-gray-400">Sélectionnez le calibre de coupon à créer, personnalisez les événements sportifs et mettez à jour votre historique de validation.</p>
                           </div>
                         </div>
                       </div>
 
-                      {/* Select active coupon tab */}
+                      {/* Select type coupon to create */}
                       <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-4 space-y-3">
-                        <label className="block text-gray-300 text-[11px] font-black uppercase tracking-wider">Sélectionner le Coupon à administrer :</label>
-                        <div className="grid grid-cols-3 gap-2">
+                        <label className="block text-gray-300 text-[11px] font-black uppercase tracking-wider">Sélectionner le Coupon à créer / Gérer les publications :</label>
+                        <div className="grid grid-cols-1 gap-2.5">
                           {[
-                            { id: 'secured', name: 'Côte 2', badge: 'Public' },
-                            { id: 'medium', name: 'Côte 5', badge: 'Minimum 1000F' },
-                            { id: 'bold', name: 'Côte 10', badge: 'Minimum 1000F' }
-                          ].map((choice) => (
-                            <button
-                              key={choice.id}
-                              type="button"
-                              onClick={() => setSelectedCouponId(choice.id)}
-                              className={`py-2 px-3 rounded-xl border text-center transition-all flex flex-col justify-center items-center ${
-                                selectedCouponId === choice.id
-                                  ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black'
-                                  : 'bg-slate-950/60 border-slate-800 text-gray-300 hover:border-slate-700'
-                              }`}
-                            >
-                              <span className="text-xs font-bold">{choice.name}</span>
-                              <span className={`text-[8px] mt-0.5 px-1.5 py-0.5 rounded font-mono ${
-                                selectedCouponId === choice.id 
-                                  ? 'bg-slate-950 text-cyan-400' 
-                                  : 'bg-slate-800 text-gray-400'
-                              }`}>
-                                {choice.badge}
-                              </span>
-                            </button>
-                          ))}
+                            { id: 'secured', name: 'Côte 2 Sécurisé', badge: 'Public', titleDefault: 'COUPON COTE 2 SÉCURISÉ 🌟', conf: 'ÉLEVÉ' },
+                            { id: 'medium', name: 'Côte 5 Médium', badge: 'Minimum 1000FCFA', titleDefault: 'COUPON COTE 5 MÉDIUM ⚡', conf: 'MOYEN' },
+                            { id: 'bold', name: 'Côte 10 Audacieux', badge: 'Minimum 1000FCFA', titleDefault: 'COUPON COTE 10 AUDACIEUX 🔥', conf: 'RISQUE ÉLEVÉ' }
+                          ].map((choice) => {
+                            const currentCoupon = coupons.find(c => c.id === choice.id);
+                            const hasActiveMatches = currentCoupon && currentCoupon.matches && currentCoupon.matches.length > 0;
+                            const matchCount = currentCoupon?.matches?.length || 0;
+
+                            return (
+                              <div key={choice.id} className="bg-slate-950/50 border border-slate-850 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-inner">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-white text-xs font-bold">{choice.name}</span>
+                                    <span className="text-[7.5px] px-1.5 py-0.5 rounded font-mono bg-[#1c2c54]/75 text-cyan-300 border border-cyan-500/10">
+                                      {choice.badge}
+                                    </span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 mt-1">
+                                    {hasActiveMatches ? (
+                                      <span className="inline-flex items-center gap-1.5 text-[9px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/20">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                        Publié ({matchCount} match{matchCount > 1 ? 'es' : ''})
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1.5 text-[9px] font-bold text-gray-400 bg-slate-900/60 px-2 py-0.5 rounded-full border border-slate-800">
+                                        <span className="w-1.5 h-1.5 rounded-full bg-gray-500"></span>
+                                        Non publié (Vide)
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                <div className="flex items-center gap-2">
+                                  {/* Create/Edit action button */}
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectCouponToCreate(choice.id)}
+                                    className={`flex-1 sm:flex-none py-1.5 px-3.5 rounded-xl border text-[10.5px] font-bold transition-all cursor-pointer ${
+                                      selectedCouponId === choice.id
+                                        ? 'bg-cyan-500 border-cyan-400 text-slate-950 font-black scale-102 shadow-md hover:bg-cyan-400'
+                                        : 'bg-slate-900 border-slate-800 text-gray-300 hover:border-slate-705'
+                                    }`}
+                                  >
+                                    Éditer / Créer
+                                  </button>
+
+                                  {/* Unpublish action button */}
+                                  {hasActiveMatches && (
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        if (window.confirm(`Voulez-vous vraiment dépublier le coupon "${choice.name}" ? Tous ses matchs en cours seront vidés.`)) {
+                                          try {
+                                            const updatedCoupons = await dbService.updateCoupon({
+                                              id: choice.id,
+                                              title: choice.titleDefault,
+                                              confidence: choice.conf as any,
+                                              totalCote: choice.id === 'secured' ? 2.0 : choice.id === 'medium' ? 5.0 : 10.0,
+                                              status: 'pending',
+                                              matches: []
+                                            });
+                                            setCoupons(updatedCoupons);
+                                            showToast(`Le coupon "${choice.name}" a été dépublié avec succès ! 🗑️`, "success");
+                                          } catch (e: any) {
+                                            showToast("Erreur lors de la dépublication du coupon.", "error");
+                                          }
+                                        }
+                                      }}
+                                      className="py-1.5 px-2.5 rounded-xl border border-red-500/20 bg-red-500/5 hover:bg-red-500/20 text-red-400 text-[10.5px] font-bold transition-all cursor-pointer"
+                                      title="Vider et Dépublier pour aujourd'hui"
+                                    >
+                                      Dépublier
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
 
-                      {/* Results scoring configuration block */}
-                      <div className="bg-[#111a33] border border-yellow-500/20 rounded-3xl p-5 space-y-3">
-                        <div className="flex justify-between items-center pb-1 border-b border-slate-800">
-                          <h4 className="text-xs font-extrabold uppercase text-yellow-400 flex items-center gap-1.5">
-                            <CheckCircle2 size={14} />
-                            Valider le résultat de ce coupon
-                          </h4>
-                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                            couponEditForm.status === 'won' 
-                              ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
-                              : couponEditForm.status === 'lost' 
-                              ? 'bg-red-500/10 text-red-400 border border-red-500/20' 
-                              : 'bg-cyan-500/10 text-cyan-400 border border-cyan-500/20'
-                          }`}>
-                            {couponEditForm.status === 'won' ? '✓ GAGNÉ' : couponEditForm.status === 'lost' ? '✗ PERDU' : '⏳ EN COURS'}
+                      {/* Display Creator Options below only when selection has happened */}
+                      {selectedCouponId === '' ? (
+                        <div className="bg-[#111a33] border border-dashed border-slate-800 rounded-3xl p-8 text-center space-y-3">
+                          <span className="inline-block p-4 bg-cyan-500/5 text-cyan-400 rounded-2xl animate-pulse">
+                            <Sparkles size={28} />
                           </span>
-                        </div>
-                        <p className="text-[11px] text-gray-300 leading-relaxed">
-                          Marquez ce coupon comme GAGNÉ, PERDU ou en cours pour adapter l'historique et les statistiques d'accès.
-                        </p>
-                        <div className="grid grid-cols-3 gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleSetCouponResult('won')}
-                            className="py-2.5 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
-                          >
-                            <CheckCircle2 size={12} />
-                            GAGNÉ ✓
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSetCouponResult('pending')}
-                            className="py-2.5 bg-slate-800 hover:bg-slate-700 text-gray-300 border border-slate-700 font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
-                          >
-                            <RefreshCw size={12} />
-                            EN COURS
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleSetCouponResult('lost')}
-                            className="py-2.5 bg-red-500 hover:bg-red-400 text-white font-black text-[11px] rounded-xl transition-all shadow-md flex items-center justify-center gap-1"
-                          >
-                            <AlertTriangle size={12} />
-                            PERDU ✗
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Manual configuration editor form */}
-                      <form onSubmit={handleSaveManualCoupon} className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl">
-                        <h4 className="text-xs font-extrabold text-cyan-400 uppercase tracking-widest pb-2 border-b border-slate-800 flex items-center gap-1.5">
-                          <Sparkles size={14} />
-                          Modifier les détails du coupon
-                        </h4>
-
-                        <div className="space-y-3">
                           <div>
-                            <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Nom du Coupon</label>
-                            <input
-                              type="text"
-                              value={couponEditForm.title}
-                              onChange={(e) => setCouponEditForm({ ...couponEditForm, title: e.target.value })}
-                              placeholder="Ex: COUPON SÉCURISÉ (COTE ~2)"
-                              className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                              required
-                            />
+                            <h5 className="text-white text-xs font-bold">Prêt pour la création</h5>
+                            <p className="text-[10px] text-gray-400 max-w-xs mx-auto mt-1 leading-relaxed">
+                              Veuillez choisir un type de coupon ci-dessus (Côte 2, Côte 5, Côte 10) pour ouvrir instantanément l'éditeur de création personnalisé.
+                            </p>
                           </div>
+                        </div>
+                      ) : (
+                        <form onSubmit={handleSaveManualCoupon} className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl animate-fade-in">
+                          <h4 className="text-xs font-extrabold text-cyan-400 uppercase tracking-widest pb-2 border-b border-slate-800 flex items-center gap-1.5">
+                            <Sparkles size={14} />
+                            Options de création : {selectedCouponId === 'secured' ? 'COUPON COTE 2' : selectedCouponId === 'medium' ? 'COUPON COTE 5' : 'COUPON COTE 10'}
+                          </h4>
 
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="space-y-3">
                             <div>
-                              <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Confiance</label>
-                              <select
-                                value={couponEditForm.confidence}
-                                onChange={(e) => setCouponEditForm({ ...couponEditForm, confidence: e.target.value as any })}
+                              <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Nom du Coupon</label>
+                              <input
+                                type="text"
+                                value={couponEditForm.title}
+                                onChange={(e) => setCouponEditForm({ ...couponEditForm, title: e.target.value })}
+                                placeholder="Ex: COUPON SÉCURISÉ (COTE ~2)"
                                 className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                              >
-                                <option value="ÉLEVÉ">ÉLEVÉ (95%)</option>
-                                <option value="MOYEN">MOYEN (85%)</option>
-                                <option value="RISQUE ÉLEVÉ">RISQUE ÉLEVÉ (75%)</option>
-                              </select>
+                                required
+                              />
                             </div>
 
-                            <div>
-                              <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Cote Globale</label>
-                              <div className="flex gap-1">
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  value={couponEditForm.totalCote}
-                                  onChange={(e) => setCouponEditForm({ ...couponEditForm, totalCote: Number(e.target.value) })}
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Confiance</label>
+                                <select
+                                  value={couponEditForm.confidence}
+                                  onChange={(e) => setCouponEditForm({ ...couponEditForm, confidence: e.target.value as any })}
                                   className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
-                                  required
-                                />
-                                <button
-                                  type="button"
-                                  onClick={autoComputeCote}
-                                  className="bg-slate-800 hover:bg-slate-700 text-cyan-400 px-2 py-1 rounded-lg text-[9px] font-bold"
-                                  title="Calculer automatiquement par multiplication"
                                 >
-                                  Auto
-                                </button>
+                                  <option value="ÉLEVÉ">ÉLEVÉ (95%)</option>
+                                  <option value="MOYEN">MOYEN (85%)</option>
+                                  <option value="RISQUE ÉLEVÉ">RISQUE ÉLEVÉ (75%)</option>
+                                </select>
+                              </div>
+
+                              <div>
+                                <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">Cote Globale</label>
+                                <div className="flex gap-1">
+                                  <input
+                                    type="number"
+                                    step="0.01"
+                                    value={couponEditForm.totalCote}
+                                    onChange={(e) => setCouponEditForm({ ...couponEditForm, totalCote: Number(e.target.value) })}
+                                    className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white shadow-inner font-mono font-bold"
+                                    required
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={autoComputeCote}
+                                    className="bg-slate-800 hover:bg-slate-700 text-cyan-400 px-2 py-1 rounded-lg text-[9px] font-bold"
+                                    title="Calculer automatiquement par multiplication"
+                                  >
+                                    Auto
+                                  </button>
+                                </div>
                               </div>
                             </div>
                           </div>
-                        </div>
 
-                        {/* Match rows editor */}
-                        <div className="space-y-3 pt-2">
-                          <div className="flex justify-between items-center">
-                            <label className="block text-[#00f0ff] text-[10px] uppercase font-extrabold tracking-wider">Événements / Matchs ({couponEditForm.matches.length})</label>
-                            <button
-                              type="button"
-                              onClick={addMatchRow}
-                              className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[10px] px-2.5 py-1 rounded-lg font-bold border border-cyan-500/20 flex items-center gap-1"
-                            >
-                              + Ajouter un Match
-                            </button>
+                          {/* Match rows editor */}
+                          <div className="space-y-3 pt-2">
+                            <div className="flex justify-between items-center">
+                              <label className="block text-[#00f0ff] text-[10px] uppercase font-extrabold tracking-wider">Événements / Matchs ({couponEditForm.matches.length})</label>
+                              <button
+                                type="button"
+                                onClick={addMatchRow}
+                                className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[10px] px-2.5 py-1 rounded-lg font-bold border border-cyan-500/20 flex items-center gap-1"
+                              >
+                                + Ajouter un Match
+                              </button>
+                            </div>
+
+                            {couponEditForm.matches.length === 0 ? (
+                              <p className="text-center py-4 text-xs text-gray-400 italic bg-slate-950/40 rounded-2xl border border-slate-900 border-dashed">Aucun match inscrit. Cliquez sur ajouter ci-dessus.</p>
+                            ) : (
+                              <div className="space-y-3">
+                                {couponEditForm.matches.map((match, idx) => (
+                                  <div key={idx} className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800 space-y-2.5 relative">
+                                    <button
+                                      type="button"
+                                      onClick={() => removeMatchRow(idx)}
+                                      className="absolute top-2 right-2 text-red-500 hover:text-red-400 text-[10px] font-bold bg-slate-900 px-1.5 py-0.5 rounded border border-slate-850"
+                                    >
+                                      Supprimer
+                                    </button>
+                                    <span className="text-[10px] text-gray-500 font-mono">Match #{idx+1}</span>
+
+                                    <div className="grid grid-cols-2 gap-2">
+                                      <div>
+                                        <label className="block text-gray-550 text-[8px] uppercase mb-0.5">Équipe Domicile</label>
+                                        <input
+                                          type="text"
+                                          placeholder="Ex: Real Madrid"
+                                          value={match.homeTeam}
+                                          onChange={(e) => updateMatchRow(idx, 'homeTeam', e.target.value)}
+                                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
+                                          required
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-gray-550 text-[8px] uppercase mb-0.5">Équipe Extérieur</label>
+                                        <input
+                                          type="text"
+                                          placeholder="Ex: FC Barcelone"
+                                          value={match.awayTeam}
+                                          onChange={(e) => updateMatchRow(idx, 'awayTeam', e.target.value)}
+                                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
+                                          required
+                                        />
+                                      </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-3 gap-2">
+                                      <div>
+                                        <label className="block text-gray-550 text-[8px] uppercase mb-0.5">Pronostic proposé</label>
+                                        <input
+                                          type="text"
+                                          placeholder="Ex: V1"
+                                          value={match.prediction}
+                                          onChange={(e) => updateMatchRow(idx, 'prediction', e.target.value)}
+                                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-semibold"
+                                          required
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-gray-550 text-[8px] uppercase mb-0.5">Cote de l'événement</label>
+                                        <input
+                                          type="number"
+                                          step="0.01"
+                                          placeholder="1.50"
+                                          value={match.odd}
+                                          onChange={(e) => updateMatchRow(idx, 'odd', Number(e.target.value))}
+                                          className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-mono"
+                                          required
+                                        />
+                                      </div>
+                                      <div>
+                                        <label className="block text-cyan-400 text-[8px] uppercase mb-0.5 font-bold">État Match</label>
+                                        <select
+                                          value={match.status || 'pending'}
+                                          onChange={(e) => updateMatchRow(idx, 'status', e.target.value)}
+                                          className={`w-full bg-slate-900 border rounded-lg px-2 py-1 text-[11px] font-bold ${
+                                            match.status === 'won' 
+                                              ? 'border-emerald-500/45 text-emerald-400' 
+                                              : match.status === 'lost' 
+                                                ? 'border-red-500/45 text-red-500' 
+                                                : 'border-slate-805 text-gray-300'
+                                          }`}
+                                        >
+                                          <option value="pending">⏳ En cours</option>
+                                          <option value="won">✓ Gagné</option>
+                                          <option value="lost">✗ Perdu</option>
+                                        </select>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
 
-                          {couponEditForm.matches.length === 0 ? (
-                            <p className="text-center py-4 text-xs text-gray-400 italic">Aucun match dans ce coupon. Cliquez sur Ajouter pour en créer un.</p>
-                          ) : (
-                            <div className="space-y-3">
-                              {couponEditForm.matches.map((match, idx) => (
-                                <div key={idx} className="bg-slate-950/60 p-3 rounded-2xl border border-slate-800 space-y-2.5 relative">
-                                  <button
-                                    type="button"
-                                    onClick={() => removeMatchRow(idx)}
-                                    className="absolute top-2 right-2 text-red-400 hover:text-red-300 text-[10px] font-bold"
-                                  >
-                                    Supprimer
-                                  </button>
-                                  <span className="text-[10px] text-gray-500 font-mono">Match #{idx+1}</span>
-
-                                  <div className="grid grid-cols-2 gap-2">
-                                    <div>
-                                      <label className="block text-gray-500 text-[9px] uppercase mb-0.5">Équipe Domicile</label>
-                                      <input
-                                        type="text"
-                                        placeholder="Ex: Real Madrid"
-                                        value={match.homeTeam}
-                                        onChange={(e) => updateMatchRow(idx, 'homeTeam', e.target.value)}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-gray-500 text-[9px] uppercase mb-0.5">Équipe Extérieur</label>
-                                      <input
-                                        type="text"
-                                        placeholder="Ex: FC Barcelone"
-                                        value={match.awayTeam}
-                                        onChange={(e) => updateMatchRow(idx, 'awayTeam', e.target.value)}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white"
-                                        required
-                                      />
-                                    </div>
-                                  </div>
-
-                                  <div className="grid grid-cols-3 gap-2">
-                                    <div>
-                                      <label className="block text-gray-500 text-[9px] uppercase mb-0.5">Pronostic proposé</label>
-                                      <input
-                                        type="text"
-                                        placeholder="Ex: Vainqueur Real (1)"
-                                        value={match.prediction}
-                                        onChange={(e) => updateMatchRow(idx, 'prediction', e.target.value)}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-semibold"
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-gray-500 text-[9px] uppercase mb-0.5">Cote</label>
-                                      <input
-                                        type="number"
-                                        step="0.01"
-                                        placeholder="1.50"
-                                        value={match.odd}
-                                        onChange={(e) => updateMatchRow(idx, 'odd', Number(e.target.value))}
-                                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-1 text-[11px] text-white font-mono"
-                                        required
-                                      />
-                                    </div>
-                                    <div>
-                                      <label className="block text-cyan-400 text-[9px] uppercase mb-0.5 font-bold">État Match</label>
-                                      <select
-                                        value={match.status || 'pending'}
-                                        onChange={(e) => updateMatchRow(idx, 'status', e.target.value)}
-                                        className={`w-full bg-slate-900 border rounded-lg px-2 py-1 text-[11px] font-bold ${
-                                          match.status === 'won' 
-                                            ? 'border-emerald-500/45 text-emerald-400' 
-                                            : match.status === 'lost' 
-                                            ? 'border-red-500/45 text-red-500' 
-                                            : 'border-slate-800 text-gray-300'
-                                        }`}
-                                      >
-                                        <option value="pending">⏳ En cours</option>
-                                        <option value="won">✓ Gagné</option>
-                                        <option value="lost">✗ Perdu</option>
-                                      </select>
-                                    </div>
-                                  </div>
-                                </div>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-
-                        {/* Submit Actions */}
-                        <div className="pt-2">
-                          <button
-                            type="submit"
-                            disabled={formLoading}
-                            className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black py-3 rounded-xl text-xs transition-colors shadow-lg flex items-center justify-center gap-1.5"
-                          >
-                            {formLoading ? (
-                              <>
-                                <RefreshCw size={14} className="animate-spin" />
-                                Enregistrement...
-                              </>
-                            ) : (
-                              <>
-                                Enregistrer et publier le coupon
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </form>
+                          {/* Submit Actions */}
+                          <div className="pt-2">
+                            <button
+                              type="submit"
+                              disabled={formLoading}
+                              className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black py-3 rounded-xl text-xs transition-colors shadow-lg flex items-center justify-center gap-1.5"
+                            >
+                              {formLoading ? (
+                                <>
+                                  <RefreshCw size={14} className="animate-spin" />
+                                  Enregistrement...
+                                </>
+                              ) : (
+                                <>
+                                  Enregistrer et publier le coupon
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </form>
+                      )}
 
                       {/* Admin validation history timeline view list */}
                       <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-3">
                         <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                          <h4 className="text-xs font-extrabold uppercase text-gray-300">Archives de validation</h4>
+                          <h4 className="text-xs font-extrabold uppercase text-gray-300">Archives de validation / Historique</h4>
                           <button
                             onClick={handleClearHistory}
-                            className="text-[10px] text-red-400 hover:underline font-bold"
+                            className="text-[10px] text-red-400 hover:underline font-bold font-display"
                           >
                             Réinitialiser l'historique
                           </button>
@@ -2635,21 +2811,50 @@ export default function App() {
                         ) : (
                           <div className="space-y-2 max-h-60 overflow-y-auto pr-1">
                             {pastCoupons.map((c) => (
-                              <div key={c.id} className="bg-slate-950/40 p-2.5 rounded-xl border border-slate-900 flex justify-between items-center text-[11px]">
-                                <div>
-                                  <p className="font-extrabold text-gray-200">{c.title}</p>
-                                  <p className="text-[10px] text-gray-500">{c.date || 'Archives'} • Cote {c.totalCote.toFixed(2)}</p>
+                              <div key={c.id} className="bg-slate-950/40 p-3 rounded-2xl border border-slate-900/60 flex justify-between items-center text-[11px] gap-2">
+                                <div className="min-w-0 flex-1">
+                                  <p className="font-extrabold text-gray-200 truncate">{c.title}</p>
+                                  <div className="flex items-center gap-1.5 mt-0.5 text-[10px] text-gray-500">
+                                    <span className="flex items-center gap-0.5"><Calendar size={10} /> {c.date || 'Archives'}</span>
+                                    <span>•</span>
+                                    <span>Cote {Number(c.totalCote).toFixed(2)}</span>
+                                    {c.matches && c.matches.length > 0 && (
+                                      <>
+                                        <span>•</span>
+                                        <span className="font-mono text-cyan-400">{c.matches.length} match{c.matches.length > 1 ? 'es' : ''}</span>
+                                      </>
+                                    )}
+                                  </div>
                                 </div>
-                                <div className="flex items-center gap-2">
-                                  <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
-                                    c.status === 'won' ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                                
+                                <div className="flex items-center gap-2 shrink-0">
+                                  {/* Status Indicator */}
+                                  <span className={`text-[9.5px] font-black px-2 py-0.5 rounded-lg ${
+                                    c.status === 'won' 
+                                      ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' 
+                                      : c.status === 'lost' 
+                                        ? 'bg-red-500/10 text-red-500 border border-red-500/20' 
+                                        : 'bg-yellow-500/10 text-yellow-500 border border-yellow-500/20'
                                   }`}>
-                                    {c.status === 'won' ? 'GAGNÉ' : 'PERDU'}
+                                    {c.status === 'won' ? '✓ GAGNÉ' : c.status === 'lost' ? '✗ PERDU' : '⏳ EN COURS'}
                                   </span>
+
+                                  {/* ACTION: Edit Archived Coupon */}
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingPastCoupon(JSON.parse(JSON.stringify(c)))} // deep clone isolated model
+                                    className="bg-cyan-500/10 hover:bg-cyan-500 text-cyan-400 hover:text-slate-950 px-2 py-1 rounded-lg text-[9px] font-extrabold border border-cyan-500/20 transition-all flex items-center gap-1 cursor-pointer"
+                                    title="Ouvrir les modificateurs de ce coupon"
+                                  >
+                                    <Edit size={10} />
+                                    Modifier
+                                  </button>
+
+                                  {/* ACTION: Delete Entry */}
                                   <button
                                     onClick={() => handleDeleteHistoryItem(c.id)}
-                                    className="text-red-400 hover:text-red-300 ml-1"
-                                    title="Supprimer de l'historique"
+                                    className="text-red-400 hover:text-white p-1 hover:bg-red-500/15 rounded-lg transition-colors border border-transparent hover:border-red-500/10"
+                                    title="Supprimer"
                                   >
                                     ✕
                                   </button>
@@ -2659,6 +2864,317 @@ export default function App() {
                           </div>
                         )}
                       </div>
+
+                      {/* POPUP/OVERLAY INLINE MODAL TO ADJUST HISTORICAL COUPONS DETAILS */}
+                      {editingPastCoupon && (() => {
+                        const editPastCouponTitle = (val: string) => {
+                          setEditingPastCoupon(prev => prev ? { ...prev, title: val } : null);
+                        };
+                        const editPastCouponConfidence = (val: any) => {
+                          setEditingPastCoupon(prev => prev ? { ...prev, confidence: val } : null);
+                        };
+                        const editPastCouponCote = (val: number) => {
+                          setEditingPastCoupon(prev => prev ? { ...prev, totalCote: val } : null);
+                        };
+                        const editPastCouponDate = (val: string) => {
+                          setEditingPastCoupon(prev => prev ? { ...prev, date: val } : null);
+                        };
+                        const editPastCouponOverallStatus = (val: 'pending' | 'won' | 'lost') => {
+                          setEditingPastCoupon(prev => prev ? { ...prev, status: val } : null);
+                        };
+
+                        const addModalMatchRow = () => {
+                          setEditingPastCoupon(prev => {
+                            if (!prev) return null;
+                            const prevMatches = prev.matches || [];
+                            return {
+                              ...prev,
+                              matches: [...prevMatches, { id: prevMatches.length + 1, homeTeam: '', awayTeam: '', prediction: '', odd: 1.5, status: 'pending' }]
+                            };
+                          });
+                        };
+
+                        const updateModalMatchRow = (index: number, field: string, value: any) => {
+                          setEditingPastCoupon(prev => {
+                            if (!prev) return null;
+                            const matchesCopy = [...(prev.matches || [])];
+                            matchesCopy[index] = { ...matchesCopy[index], [field]: value };
+                            return { ...prev, matches: matchesCopy };
+                          });
+                        };
+
+                        const removeModalMatchInEdit = (index: number) => {
+                          setEditingPastCoupon(prev => {
+                            if (!prev) return null;
+                            return {
+                              ...prev,
+                              matches: (prev.matches || []).filter((_, i) => i !== index)
+                            };
+                          });
+                        };
+
+                        const autoComputeModalCote = () => {
+                          if (!editingPastCoupon) return;
+                          const prod = (editingPastCoupon.matches || []).reduce((product, m) => product * (Number(m.odd) || 1), 1);
+                          setEditingPastCoupon(prev => prev ? { ...prev, totalCote: Number(prod.toFixed(2)) } : null);
+                        };
+
+                        return (
+                          <div className="fixed inset-0 bg-slate-950/85 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+                            <div className="bg-[#0b132a] border border-slate-800 rounded-3xl w-full max-w-lg p-5 space-y-4 shadow-2xl relative animate-fade-in max-h-[90vh] overflow-y-auto">
+                              
+                              <div className="flex justify-between items-center pb-2 border-b border-slate-800">
+                                <h3 className="text-xs font-black text-cyan-400 uppercase tracking-widest flex items-center gap-1.5">
+                                  <Edit size={14} />
+                                  Modifier le Coupon Historique
+                                </h3>
+                                <button
+                                  type="button"
+                                  onClick={() => setEditingPastCoupon(null)}
+                                  className="text-gray-400 hover:text-white p-1 hover:bg-slate-800 rounded-lg transition-colors border-none"
+                                >
+                                  <X size={16} />
+                                </button>
+                              </div>
+
+                              <form onSubmit={handleSaveEditedPastCoupon} className="space-y-4">
+                                
+                                <div className="space-y-3">
+                                  <div>
+                                    <label className="block text-gray-400 text-[9px] uppercase font-bold mb-1">Nom du Coupon</label>
+                                    <input
+                                      type="text"
+                                      required
+                                      value={editingPastCoupon.title}
+                                      onChange={(e) => editPastCouponTitle(e.target.value)}
+                                      className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
+                                    />
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-3">
+                                    <div>
+                                      <label className="block text-gray-400 text-[9px] uppercase font-bold mb-1">Confiance</label>
+                                      <select
+                                        value={editingPastCoupon.confidence}
+                                        onChange={(e) => editPastCouponConfidence(e.target.value as any)}
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white cursor-pointer"
+                                      >
+                                        <option value="ÉLEVÉ">ÉLEVÉ (95%)</option>
+                                        <option value="MOYEN">MOYEN (85%)</option>
+                                        <option value="RISQUE ÉLEVÉ">RISQUE ÉLEVÉ (75%)</option>
+                                      </select>
+                                    </div>
+                                    <div>
+                                      <label className="block text-gray-400 text-[9px] uppercase font-bold mb-1">Date d'archivage</label>
+                                      <input
+                                        type="text"
+                                        required
+                                        value={editingPastCoupon.date || ''}
+                                        onChange={(e) => editPastCouponDate(e.target.value)}
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white"
+                                        placeholder="JJ/MM/AAAA"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  {/* Status Validation Panel */}
+                                  <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800 space-y-2">
+                                    <label className="block text-yellow-400 text-[10px] uppercase font-black tracking-wider text-center">
+                                      Validation: Statut Global du Coupon
+                                    </label>
+                                    <div className="grid grid-cols-3 gap-1.5">
+                                      <button
+                                        type="button"
+                                        onClick={() => editPastCouponOverallStatus('pending')}
+                                        className={`py-1.5 text-[9px] font-bold rounded-lg transition-all ${
+                                          editingPastCoupon.status === 'pending' || !editingPastCoupon.status
+                                            ? 'bg-yellow-500 text-slate-950 font-black'
+                                            : 'bg-slate-900 text-gray-400 hover:text-white'
+                                        }`}
+                                      >
+                                        ⏳ EN COURS
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => editPastCouponOverallStatus('won')}
+                                        className={`py-1.5 text-[9px] font-bold rounded-lg transition-all ${
+                                          editingPastCoupon.status === 'won'
+                                            ? 'bg-emerald-500 text-slate-950 font-black'
+                                            : 'bg-slate-900 text-gray-400 hover:text-white'
+                                        }`}
+                                      >
+                                        ✓ GAGNÉ
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={() => editPastCouponOverallStatus('lost')}
+                                        className={`py-1.5 text-[9px] font-bold rounded-lg transition-all ${
+                                          editingPastCoupon.status === 'lost'
+                                            ? 'bg-red-500 text-white font-black'
+                                            : 'bg-slate-900 text-gray-400 hover:text-white'
+                                        }`}
+                                      >
+                                        ✗ PERDU
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Match events inline editor inside Modal */}
+                                <div className="space-y-2.5 pt-2 border-t border-slate-800">
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-[#00f0ff] text-[10px] uppercase font-extrabold tracking-wider">
+                                      Matchs à Valider ({editingPastCoupon.matches?.length || 0})
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={addModalMatchRow}
+                                      className="bg-cyan-500/10 hover:bg-cyan-500/20 text-cyan-400 text-[9px] px-2 py-0.5 rounded-md font-bold border border-cyan-500/20 cursor-pointer"
+                                    >
+                                      + Ajouter Match
+                                    </button>
+                                  </div>
+
+                                  {(!editingPastCoupon.matches || editingPastCoupon.matches.length === 0) ? (
+                                    <p className="text-center py-2 text-[10px] text-gray-450 italic">Aucun événement inscrit.</p>
+                                  ) : (
+                                    <div className="space-y-3 max-h-48 overflow-y-auto pr-1">
+                                      {editingPastCoupon.matches.map((m, idx) => (
+                                        <div key={idx} className="bg-slate-950/80 p-2.5 rounded-xl border border-slate-800 space-y-2 relative">
+                                          <button
+                                            type="button"
+                                            onClick={() => removeModalMatchInEdit(idx)}
+                                            className="absolute top-1.5 right-2 text-red-500 hover:text-red-400 text-[8px] font-bold"
+                                          >
+                                            Effacer
+                                          </button>
+                                          <span className="text-[8px] text-gray-500 font-mono">Match #{idx+1}</span>
+
+                                          <div className="grid grid-cols-2 gap-2">
+                                            <div>
+                                              <label className="block text-gray-500 text-[8px] uppercase">Domicile</label>
+                                              <input
+                                                type="text"
+                                                required
+                                                value={m.homeTeam}
+                                                onChange={(e) => updateModalMatchRow(idx, 'homeTeam', e.target.value)}
+                                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 text-[10px] text-white"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-gray-500 text-[8px] uppercase">Extérieur</label>
+                                              <input
+                                                type="text"
+                                                required
+                                                value={m.awayTeam}
+                                                onChange={(e) => updateModalMatchRow(idx, 'awayTeam', e.target.value)}
+                                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 text-[10px] text-white"
+                                              />
+                                            </div>
+                                          </div>
+
+                                          <div className="grid grid-cols-3 gap-2">
+                                            <div>
+                                              <label className="block text-gray-500 text-[8px] uppercase">Pronostic</label>
+                                              <input
+                                                type="text"
+                                                required
+                                                value={m.prediction}
+                                                onChange={(e) => updateModalMatchRow(idx, 'prediction', e.target.value)}
+                                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 text-[10px] text-white font-bold"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-gray-500 text-[8px] uppercase">Cote (Odd)</label>
+                                              <input
+                                                type="number"
+                                                step="0.01"
+                                                required
+                                                value={m.odd}
+                                                onChange={(e) => updateModalMatchRow(idx, 'odd', Number(e.target.value))}
+                                                className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-0.5 text-[10px] text-white"
+                                              />
+                                            </div>
+                                            <div>
+                                              <label className="block text-cyan-400 text-[8px] uppercase font-bold">État Match</label>
+                                              <select
+                                                value={m.status || 'pending'}
+                                                onChange={(e) => updateModalMatchRow(idx, 'status', e.target.value)}
+                                                className={`w-full bg-slate-900 border rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer ${
+                                                  m.status === 'won' 
+                                                    ? 'border-emerald-500/40 text-emerald-400' 
+                                                    : m.status === 'lost' 
+                                                      ? 'border-red-500/40 text-red-500' 
+                                                      : 'border-slate-800 text-gray-300'
+                                                }`}
+                                              >
+                                                <option value="pending">⏳ En cours</option>
+                                                <option value="won">✓ Gagné</option>
+                                                <option value="lost">✗ Perdu</option>
+                                              </select>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+
+                                {/* Total Cote calculations & Actions spacer */}
+                                <div className="flex justify-between items-center text-xs py-1.5 border-t border-slate-800">
+                                  <span className="text-gray-400 font-display">Calcul Cote Globale:</span>
+                                  <div className="flex items-center gap-1.5">
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      required
+                                      value={editingPastCoupon.totalCote}
+                                      onChange={(e) => editPastCouponCote(Number(e.target.value))}
+                                      className="w-16 text-center bg-slate-950 font-mono text-xs text-white border border-slate-800 rounded-lg py-0.5"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={autoComputeModalCote}
+                                      className="bg-slate-800 hover:bg-slate-700 text-cyan-400 px-1.5 py-0.5 rounded text-[8px] font-bold"
+                                    >
+                                      Auto
+                                    </button>
+                                  </div>
+                                </div>
+
+                                {/* Footer Buttons */}
+                                <div className="grid grid-cols-2 gap-2.5 pt-2">
+                                  <button
+                                    type="button"
+                                    onClick={() => setEditingPastCoupon(null)}
+                                    className="w-full bg-slate-800 hover:bg-slate-700 text-white font-bold py-2.5 rounded-xl text-xs transition-colors cursor-pointer"
+                                    disabled={formLoading}
+                                  >
+                                    Annuler
+                                  </button>
+                                  <button
+                                    type="submit"
+                                    disabled={formLoading}
+                                    className="w-full bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-black py-2.5 rounded-xl text-xs transition-colors shadow-lg flex items-center justify-center gap-1 cursor-pointer"
+                                  >
+                                    {formLoading ? (
+                                      <>
+                                        <RefreshCw size={12} className="animate-spin" />
+                                        Mise à jour...
+                                      </>
+                                    ) : (
+                                      <>
+                                        Enregistrer
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
+
+                              </form>
+                            </div>
+                          </div>
+                        );
+                      })()}
 
                     </div>
                   );
