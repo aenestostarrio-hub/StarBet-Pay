@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs';
-import https from 'https';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
@@ -214,53 +213,8 @@ function notifyAdminsOfNewTransaction(tx: DBTransaction) {
   });
 }
 
-// Download PWA Assets locally to serve with proper MIME types and local reliability
-function downloadPWAAssets() {
-  try {
-    const publicDir = path.resolve(process.cwd(), 'public');
-    if (!fs.existsSync(publicDir)) {
-      fs.mkdirSync(publicDir, { recursive: true });
-    }
-
-    const iconUrl = 'https://cdn-icons-png.flaticon.com/512/10043/10043372.png';
-    const filesToDownload = [
-      { path: path.join(publicDir, 'icon-512.png'), desc: '512x512 icon' },
-      { path: path.join(publicDir, 'icon-192.png'), desc: '192x192 icon' },
-      { path: path.join(publicDir, 'icon.png'), desc: 'default icon' }
-    ];
-
-    filesToDownload.forEach((item) => {
-      if (!fs.existsSync(item.path)) {
-        console.log(`[PWA icon downloader]: Downloading ${item.desc}...`);
-        const fileStream = fs.createWriteStream(item.path);
-        https.get(iconUrl, (response) => {
-          if (response.statusCode === 200) {
-            response.pipe(fileStream);
-            fileStream.on('finish', () => {
-              fileStream.close();
-              console.log(`[PWA icon downloader]: Successfully saved ${item.desc}`);
-            });
-          } else {
-            fileStream.close();
-            fs.unlink(item.path, () => {});
-            console.error(`[PWA icon downloader]: Server returned status ${response.statusCode} for ${item.desc}`);
-          }
-        }).on('error', (err) => {
-          fileStream.close();
-          fs.unlink(item.path, () => {});
-          console.error(`[PWA icon downloader]: Request failed for ${item.desc}:`, err.message);
-        });
-      }
-    });
-  } catch (err) {
-    console.error('[PWA asset helper failure]:', err);
-  }
-}
-
 // Express application setup
 async function startServer() {
-  downloadPWAAssets();
-
   const app = express();
   app.use(express.json({ limit: '50mb' })); // Allow screenshot uploads
 

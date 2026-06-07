@@ -3,26 +3,15 @@
   "name": "StarBetPay - 1XBET Dépôt & Retrait Sécurisé",
   "icons": [
     {
-      "src": "/icon.png",
-      "sizes": "512x512",
-      "type": "image/png"
-    },
-    {
-      "src": "/icon-192.png",
-      "sizes": "192x192",
+      "src": "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
       "type": "image/png",
-      "purpose": "any"
-    },
-    {
-      "src": "/icon-512.png",
       "sizes": "512x512",
-      "type": "image/png",
-      "purpose": "maskable"
+      "purpose": "any maskable"
     }
   ],
   "start_url": "/",
-  "background_color": "#0b132b",
-  "theme_color": "#0b132b",
+  "background_color": "#0d1b2a",
+  "theme_color": "#00f0ff",
   "display": "standalone",
   "orientation": "portrait"
 }
