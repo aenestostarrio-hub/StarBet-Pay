@@ -3,7 +3,7 @@ import {
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
-  Edit, Calendar
+  Edit, Calendar, ChevronDown
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
@@ -107,10 +107,13 @@ export default function App() {
 
   // Admin Dashboard UI State
   const [isAdminMode, setIsAdminMode] = useState(false);
-  const [adminTab, setAdminTab] = useState<'deposits' | 'withdrawals' | 'gains' | 'pronos' | 'config'>('deposits');
+  const [adminTab, setAdminTab] = useState<'stats' | 'deposits' | 'withdrawals' | 'pronos' | 'config' | 'users'>('stats');
   const [adminSubTab, setAdminSubTab] = useState<'pending' | 'validated' | 'rejected'>('pending');
   const [adminRejectedReason, setAdminRejectedReason] = useState<Record<string, string>>({});
   const [activeReceiptLightbox, setActiveReceiptLightbox] = useState<string | null>(null);
+  const [expandedTxIds, setExpandedTxIds] = useState<Record<string, boolean>>({});
+  const [allUsers, setAllUsers] = useState<DBUser[]>([]);
+  const [usersSearchQuery, setUsersSearchQuery] = useState('');
   
   // Client interactive overlay modal state
   const [isClientPopupDismissed, setIsClientPopupDismissed] = useState<boolean>(() => {
@@ -296,11 +299,14 @@ export default function App() {
     }
   };
 
-  // Fetch ALL transactions for Admin Dashboard
+  // Fetch ALL transactions and users for Admin Dashboard
   const fetchAdminTransactions = async () => {
     try {
       const txData = await dbService.getTransactions();
       setTransactions(txData);
+      
+      const usersData = await dbService.getUsers();
+      setAllUsers(usersData);
     } catch (e) {
       console.error(e);
     }
@@ -664,7 +670,7 @@ export default function App() {
   const handleAdminUpdateStatus = async (txId: string, status: 'pending' | 'validated' | 'rejected') => {
     const reason = adminRejectedReason[txId] || '';
     if (status === 'rejected' && !reason.trim()) {
-      alert('Veuillez saisir un motif de rejet/annulation de la demande.');
+      showToast('Veuillez saisir un motif de rejet/annulation de la demande.', 'warning');
       return;
     }
 
@@ -676,9 +682,11 @@ export default function App() {
         return next;
       });
       fetchAdminTransactions();
+      const statusText = status === 'validated' ? 'validée' : status === 'rejected' ? 'rejetée' : 'remise en attente';
+      showToast(`Opération ${statusText} avec succès ! 🎉`, 'success');
     } catch (e: any) {
       console.error(e);
-      alert(e.message || "Erreur lors de la mise à jour de la transaction.");
+      showToast(e.message || "Erreur lors de la mise à jour.", 'error');
     }
   };
 
@@ -2040,11 +2048,12 @@ export default function App() {
                 {/* Sub-tabs admin choices */}
                 <div className="flex gap-1.5 bg-slate-950/60 p-1 rounded-xl overflow-x-auto text-[11px] font-extrabold scrollbar-none">
                   {[
+                    { id: 'stats', label: 'Statistiques' },
                     { id: 'deposits', label: 'Dépôts' },
                     { id: 'withdrawals', label: 'Retraits' },
-                    { id: 'gains', label: 'Gains' },
                     { id: 'pronos', label: 'Pronos' },
-                    { id: 'config', label: 'Config' }
+                    { id: 'config', label: 'Config' },
+                    { id: 'users', label: 'Utilisateurs' }
                   ].map((tab) => (
                     <button
                       key={tab.id}
@@ -2115,157 +2124,173 @@ export default function App() {
                         Aucun élément dans cette catégorie.
                       </div>
                     ) : (
-                      filteredTransactions.map((tx) => (
-                        <div key={tx.id} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <p className="text-base font-extrabold font-mono text-[#00f0ff]">{tx.amount.toLocaleString()} FCFA</p>
-                              <p className="text-[11px] font-semibold text-gray-300 mt-0.5">{tx.userName} • {tx.userPhone}</p>
-                              <p className="text-[10px] text-cyan-400 font-semibold mt-1">Compte 1xBet : {tx.xbetAccount}</p>
-                            </div>
-                            <span className="text-[10px] text-gray-400 font-mono">{tx.date}</span>
-                          </div>
-
-                          <div className="bg-slate-950/50 p-3 rounded-xl border border-slate-800 text-[11px] text-gray-300 space-y-2">
-                            <div className="flex justify-between">
-                              <span className="text-gray-500">Moyen de paiement:</span>
-                              <span className="font-bold text-white">{tx.paymentMethod}</span>
-                            </div>
-                            {tx.paymentNumber && (
-                              <div className="flex justify-between">
-                                <span className="text-gray-500">Envoyé sur le numéro:</span>
-                                <span className="font-mono text-cyan-300">{tx.paymentNumber}</span>
+                      filteredTransactions.map((tx) => {
+                        const isExpanded = !!expandedTxIds[tx.id];
+                        return (
+                          <div key={tx.id} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg transition-all">
+                            {/* COLLAPSIBLE HEADER CARD */}
+                            <div 
+                              onClick={() => setExpandedTxIds(prev => ({ ...prev, [tx.id]: !prev[tx.id] }))}
+                              className="flex justify-between items-center cursor-pointer select-none"
+                            >
+                              <div>
+                                <p className="text-base font-extrabold font-mono text-[#00f0ff]">{tx.amount.toLocaleString()} FCFA</p>
+                                <p className="text-[11px] font-semibold text-gray-300 mt-0.5">{tx.userName} • {tx.userPhone}</p>
                               </div>
-                            )}
-                            <div className="flex justify-between items-center">
-                              <span className="text-gray-500">ID COMPTE 1XBET:</span>
-                              <div className="flex items-center gap-1.5">
-                                <span className="font-mono text-yellow-400 font-bold">{tx.xbetAccount}</span>
-                                <button 
-                                  onClick={() => handleCopyToClipboard(tx.xbetAccount)}
-                                  className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
-                                >
-                                  {copiedText === tx.xbetAccount ? (
-                                    <>
-                                      <Check size={10} className="text-emerald-400" />
-                                      <span className="text-emerald-400">Copié !</span>
-                                    </>
-                                  ) : (
-                                    'Copier'
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-gray-400 font-mono">{tx.date}</span>
+                                <ChevronDown 
+                                  size={16} 
+                                  className={`text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
+                                />
+                              </div>
+                            </div>
+
+                            {isExpanded && (
+                              <div className="space-y-3 pt-3 border-t border-slate-800/60 animate-fade-in">
+                                <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800 text-[11px] text-gray-300 space-y-2">
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">Moyen de paiement:</span>
+                                    <span className="font-bold text-white">{tx.paymentMethod}</span>
+                                  </div>
+                                  {tx.paymentNumber && (
+                                    <div className="flex justify-between">
+                                      <span className="text-gray-500">Envoyé sur le numéro:</span>
+                                      <span className="font-mono text-cyan-300">{tx.paymentNumber}</span>
+                                    </div>
                                   )}
-                                </button>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-gray-500">ID COMPTE 1XBET:</span>
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="font-mono text-yellow-400 font-bold">{tx.xbetAccount}</span>
+                                      <button 
+                                        onClick={() => handleCopyToClipboard(tx.xbetAccount)}
+                                        className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
+                                      >
+                                        {copiedText === tx.xbetAccount ? (
+                                          <>
+                                            <Check size={10} className="text-emerald-400" />
+                                            <span className="text-emerald-400">Copié !</span>
+                                          </>
+                                        ) : (
+                                          'Copier'
+                                        )}
+                                      </button>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Render Screenshot Receipt if uploaded */}
+                                {tx.screenshot ? (
+                                  <div className="space-y-2">
+                                    <span className="text-[10px] text-gray-500 tracking-wider font-semibold uppercase block">Capture d'écran envoyée</span>
+                                    <div className="relative group rounded-xl overflow-hidden border border-slate-800 bg-slate-900/60 max-h-48 flex items-center justify-center">
+                                      <img src={tx.screenshot} className="max-h-48 object-contain rounded-xl" alt="Ticket client" />
+                                      <button
+                                        onClick={() => setActiveReceiptLightbox(tx.screenshot || null)}
+                                        className="absolute inset-x-0 bottom-0 bg-slate-950/70 p-2 flex items-center justify-center text-[10px] font-bold text-cyan-400 gap-1"
+                                      >
+                                        <Eye size={12} />
+                                        Agrandir la capture
+                                      </button>
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <p className="text-[10px] text-amber-500 bg-amber-500/10 p-2 rounded">Aucune capture d'écran fournie par l'utilisateur.</p>
+                                )}
+
+                                {/* Reject comment display if validated / rejected */}
+                                {tx.status === 'rejected' && tx.rejectionReason && (
+                                  <p className="text-xs text-red-400 p-2 bg-red-500/5 rounded border border-red-500/10">
+                                    <strong>Raison du rejet :</strong> {tx.rejectionReason}
+                                  </p>
+                                )}
+
+                                {/* Approval Controls */}
+                                <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
+                                  {tx.status === 'pending' && (
+                                    <div className="space-y-2.5">
+                                      <input 
+                                        type="text" 
+                                        placeholder="Motif du rejet (Obligatoire pour annuler)"
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                        value={adminRejectedReason[tx.id] || ''}
+                                        onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                          className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-400 text-xs font-bold rounded-xl transition-all"
+                                        >
+                                          Annuler / Refuser
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                          className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                        >
+                                          Valider le dépôt
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {tx.status === 'validated' && (
+                                    <div className="space-y-2.5">
+                                      <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
+                                        ✓ Opération Validée
+                                      </span>
+                                      <input 
+                                        type="text" 
+                                        placeholder="Motif d'annulation de force (Saisir si vous annulez)"
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                        value={adminRejectedReason[tx.id] || ''}
+                                        onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          title="Remettre cette opération à l'état en attente de vérification"
+                                        >
+                                          Remettre En attente
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                          className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
+                                        >
+                                          Annuler de force
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {tx.status === 'rejected' && (
+                                    <div className="space-y-2.5">
+                                      <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
+                                        ✗ Opération Annulée / Rejetée
+                                      </span>
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                        >
+                                          Rétablir l'opération
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                          className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                        >
+                                          Rétablir et Valider
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
                               </div>
-                            </div>
+                            )}
                           </div>
-
-                          {/* Render Screenshot Receipt if uploaded */}
-                          {tx.screenshot ? (
-                            <div className="space-y-2">
-                              <span className="text-[10px] text-gray-500 tracking-wider font-semibold uppercase block">Capture d'écran envoyée</span>
-                              <div className="relative group rounded-xl overflow-hidden border border-slate-800 bg-slate-900/60 max-h-48 flex items-center justify-center">
-                                <img src={tx.screenshot} className="max-h-48 object-contain rounded-xl" alt="Ticket client" />
-                                <button
-                                  onClick={() => setActiveReceiptLightbox(tx.screenshot || null)}
-                                  className="absolute inset-0 bg-slate-950/70 opacity-0 group-hover:opacity-100 flex items-center justify-center text-xs font-bold transition-opacity text-cyan-400 gap-1"
-                                >
-                                  <Eye size={16} />
-                                  Agrandir la capture
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <p className="text-[10px] text-amber-500 bg-amber-500/10 p-2 rounded">Aucune capture d'écran fournie par l'utilisateur.</p>
-                          )}
-
-                          {/* Reject comment display if validated / rejected */}
-                          {tx.status === 'rejected' && tx.rejectionReason && (
-                            <p className="text-xs text-red-400 p-2 bg-red-500/5 rounded border border-red-500/10">
-                              <strong>Raison du rejet :</strong> {tx.rejectionReason}
-                            </p>
-                          )}
-
-                          {/* Approval Controls */}
-                          <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
-                            {tx.status === 'pending' && (
-                              <div className="space-y-2.5">
-                                <input 
-                                  type="text" 
-                                  placeholder="Motif du rejet (Obligatoire pour annuler)"
-                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
-                                  value={adminRejectedReason[tx.id] || ''}
-                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                    className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-400 text-xs font-bold rounded-xl transition-all"
-                                  >
-                                    Annuler / Refuser
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                    className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
-                                  >
-                                    Valider le dépôt
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            {tx.status === 'validated' && (
-                              <div className="space-y-2.5">
-                                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
-                                  ✓ Opération Validée
-                                </span>
-                                <input 
-                                  type="text" 
-                                  placeholder="Motif d'annulation de force (Saisir si vous annulez)"
-                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
-                                  value={adminRejectedReason[tx.id] || ''}
-                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
-                                    title="Remettre cette opération à l'état en attente de vérification"
-                                  >
-                                    Remettre En attente
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                    className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
-                                  >
-                                    Annuler de force
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-
-                            {tx.status === 'rejected' && (
-                              <div className="space-y-2.5">
-                                <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
-                                  ✗ Opération Annulée / Rejetée
-                                </span>
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
-                                  >
-                                    Remettre En attente
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                    className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
-                                  >
-                                    Rétablir et Valider
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
@@ -2278,192 +2303,389 @@ export default function App() {
                         Aucun retrait trouvé dans cette catégorie.
                       </div>
                     ) : (
-                      filteredTransactions.map((tx) => (
-                        <div key={tx.id} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg">
-                          <div className="flex justify-between items-start">
-                            <div>
-                              <p className="text-base font-extrabold font-mono text-pink-400">{tx.amount.toLocaleString()} FCFA</p>
-                              <p className="text-[11px] font-semibold text-gray-300 mt-0.5">{tx.userName} • {tx.userPhone}</p>
-                              {tx.type === 'commission_payout' && (
-                                <span className="text-[9px] font-bold text-yellow-500 bg-yellow-500/10 px-2 py-0.5 rounded mt-1.5 block w-fit">Retrait de Commission</span>
-                              )}
-                            </div>
-                            <span className="text-[10px] text-gray-400 font-mono">{tx.date}</span>
-                          </div>
-
-                          <div className="bg-slate-950/50 p-3 rounded-xl border border-slate-800 text-[11px] text-gray-300 space-y-2">
-                            <div className="flex justify-between">
-                              <span className="text-gray-500">Recevoir sur:</span>
-                              <span className="font-bold text-white">{tx.paymentMethod}</span>
-                            </div>
-                            <div className="flex justify-between items-center">
-                              <span className="text-gray-500">Numéro destinataire:</span>
-                              <span className="font-mono text-cyan-300 font-bold">{tx.paymentNumber}</span>
-                            </div>
-                            {tx.withdrawCode && (
-                              <div className="flex justify-between items-center">
-                                <span className="text-gray-500 font-semibold uppercase tracking-wider text-[10px]">Code de retrait 1xBet:</span>
-                                <div className="flex items-center gap-1.5">
-                                  <span className="font-mono text-[#00f0ff] font-black">{tx.withdrawCode}</span>
-                                  <button 
-                                    onClick={() => handleCopyToClipboard(tx.withdrawCode || '')}
-                                    className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
-                                  >
-                                    {copiedText === tx.withdrawCode ? (
-                                      <>
-                                        <Check size={10} className="text-emerald-400" />
-                                        <span className="text-emerald-400">Copié !</span>
-                                      </>
-                                    ) : (
-                                      'Copier'
-                                    )}
-                                  </button>
-                                </div>
+                      filteredTransactions.map((tx) => {
+                        const isExpanded = !!expandedTxIds[tx.id];
+                        return (
+                          <div key={tx.id} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-3 shadow-lg transition-all">
+                            {/* COLLAPSIBLE HEADER CARD */}
+                            <div 
+                              onClick={() => setExpandedTxIds(prev => ({ ...prev, [tx.id]: !prev[tx.id] }))}
+                              className="flex justify-between items-center cursor-pointer select-none"
+                            >
+                              <div>
+                                <p className="text-base font-extrabold font-mono text-pink-400">{tx.amount.toLocaleString()} FCFA</p>
+                                <p className="text-[11px] font-semibold text-gray-300 mt-0.5">{tx.userName} • {tx.userPhone}</p>
+                                {tx.type === 'commission_payout' && (
+                                  <span className="text-[9px] font-bold text-yellow-500 bg-yellow-500/10 px-2 py-0.5 rounded mt-1.5 block w-fit">Retrait de Commission</span>
+                                )}
                               </div>
-                            )}
-                          </div>
-
-                          {/* Reject comment display if validated / rejected */}
-                          {tx.status === 'rejected' && tx.rejectionReason && (
-                            <p className="text-xs text-red-300 p-2 bg-red-500/5 rounded border border-red-500/10">
-                              <strong>Raison du rejet :</strong> {tx.rejectionReason}
-                            </p>
-                          )}
-
-                          {/* Approval Controls */}
-                          <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
-                            {tx.status === 'pending' && (
-                              <div className="space-y-2.5">
-                                <input 
-                                  type="text" 
-                                  placeholder="Motif du rejet (Obligatoire pour annuler)"
-                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
-                                  value={adminRejectedReason[tx.id] || ''}
-                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-gray-400 font-mono">{tx.date}</span>
+                                <ChevronDown 
+                                  size={16} 
+                                  className={`text-gray-400 transition-transform duration-300 ${isExpanded ? 'rotate-180' : 'rotate-0'}`} 
                                 />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                    className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-500 text-xs font-bold rounded-xl transition-all"
-                                  >
-                                    Annuler / Refuser
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                    className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
-                                  >
-                                    Valider le retrait
-                                  </button>
-                                </div>
                               </div>
-                            )}
+                            </div>
 
-                            {tx.status === 'validated' && (
-                              <div className="space-y-2.5">
-                                <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
-                                  ✓ Retrait Validé
-                                </span>
-                                <input 
-                                  type="text" 
-                                  placeholder="Motif d'annulation de force (Saisir si vous annulez)"
-                                  className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
-                                  value={adminRejectedReason[tx.id] || ''}
-                                  onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
-                                />
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
-                                    title="Remettre cette opération à l'état en attente de vérification"
-                                  >
-                                    Remettre En attente
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                    className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-00 font-bold rounded-xl transition-all"
-                                  >
-                                    Annuler de force
-                                  </button>
+                            {isExpanded && (
+                              <div className="space-y-3 pt-3 border-t border-slate-800/60 animate-fade-in">
+                                <div className="bg-slate-950/50 p-2.5 rounded-xl border border-slate-800 text-[11px] text-gray-300 space-y-2">
+                                  <div className="flex justify-between">
+                                    <span className="text-gray-500">Recevoir sur:</span>
+                                    <span className="font-bold text-white">{tx.paymentMethod}</span>
+                                  </div>
+                                  <div className="flex justify-between items-center">
+                                    <span className="text-gray-500">Numéro destinataire:</span>
+                                    <span className="font-mono text-cyan-300 font-bold">{tx.paymentNumber}</span>
+                                  </div>
+                                  {tx.withdrawCode && (
+                                    <div className="flex justify-between items-center">
+                                      <span className="text-gray-500 font-semibold uppercase tracking-wider text-[10px]">Code de retrait 1xBet:</span>
+                                      <div className="flex items-center gap-1.5">
+                                        <span className="font-mono text-[#00f0ff] font-black">{tx.withdrawCode}</span>
+                                        <button 
+                                          onClick={() => handleCopyToClipboard(tx.withdrawCode || '')}
+                                          className="text-[9px] text-cyan-400 hover:text-white px-1.5 py-0.5 bg-slate-800 border border-slate-700 rounded flex items-center gap-1 font-bold"
+                                        >
+                                          {copiedText === tx.withdrawCode ? (
+                                            <>
+                                              <Check size={10} className="text-emerald-400" />
+                                              <span className="text-emerald-400">Copié !</span>
+                                            </>
+                                          ) : (
+                                            'Copier'
+                                          )}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
-                              </div>
-                            )}
 
-                            {tx.status === 'rejected' && (
-                              <div className="space-y-2.5">
-                                <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
-                                  ✗ Retrait Annulé / Rejeté
-                                </span>
-                                <div className="flex gap-2">
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                    className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
-                                  >
-                                    Remettre En attente
-                                  </button>
-                                  <button
-                                    onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                    className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
-                                  >
-                                    Rétablir et Valider
-                                  </button>
+                                {/* Reject comment display if validated / rejected */}
+                                {tx.status === 'rejected' && tx.rejectionReason && (
+                                  <p className="text-xs text-red-300 p-2 bg-red-500/5 rounded border border-red-500/10">
+                                    <strong>Raison du rejet :</strong> {tx.rejectionReason}
+                                  </p>
+                                )}
+
+                                {/* Approval Controls */}
+                                <div className="space-y-3 pt-2.5 border-t border-slate-800/40">
+                                  {tx.status === 'pending' && (
+                                    <div className="space-y-2.5">
+                                      <input 
+                                        type="text" 
+                                        placeholder="Motif du rejet (Obligatoire pour annuler)"
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                        value={adminRejectedReason[tx.id] || ''}
+                                        onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                          className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-550 text-xs font-bold rounded-xl transition-all"
+                                        >
+                                          Annuler / Refuser
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                          className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                        >
+                                          Valider le retrait
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {tx.status === 'validated' && (
+                                    <div className="space-y-2.5">
+                                      <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/15 border border-emerald-500/20 px-2 py-1 rounded block w-fit">
+                                        ✓ Retrait Validé
+                                      </span>
+                                      <input 
+                                        type="text" 
+                                        placeholder="Motif d'annulation de force (Saisir si vous annulez)"
+                                        className="w-full bg-slate-950/80 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-500"
+                                        value={adminRejectedReason[tx.id] || ''}
+                                        onChange={(e) => setAdminRejectedReason({ ...adminRejectedReason, [tx.id]: e.target.value })}
+                                      />
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          title="Remettre cette opération à l'état en attente de vérification"
+                                        >
+                                          Remettre En attente
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
+                                          className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
+                                        >
+                                          Annuler de force
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+
+                                  {tx.status === 'rejected' && (
+                                    <div className="space-y-2.5">
+                                      <span className="text-[10px] text-red-400 font-bold bg-red-500/15 border border-red-500/20 px-2 py-1 rounded block w-fit">
+                                        ✗ Retrait Annulé / Rejeté
+                                      </span>
+                                      <div className="flex gap-2">
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
+                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                        >
+                                          Remettre En attente
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
+                                          className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                        >
+                                          Rétablir et Valider
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
                             )}
                           </div>
-                        </div>
-                      ))
+                        );
+                      })
                     )}
                   </div>
                 )}
 
-                {/* 3. ADMINISTRATION: PLATFORM GAINS & ANALYTICS VIEW */}
-                {adminTab === 'gains' && (
-                  <div className="space-y-5 animate-fade-in">
-                    <h3 className="text-sm font-extrabold uppercase font-display tracking-wider text-gray-200">Rapport de Gains analytiques</h3>
-                    
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4">
-                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-1">Volume Dépôts validés</p>
-                        <p className="text-lg font-black font-mono text-[#00f0ff]">{depositTotalVolume.toLocaleString()} F</p>
+                {/* 3. ADMINISTRATION: PLATFORM STATS & ANALYTICS VIEW */}
+                {adminTab === 'stats' && (() => {
+                  // Operational Stats
+                  const depositCount = transactions.filter(t => t.type === 'deposit').length;
+                  const validatedDepositCount = transactions.filter(t => t.type === 'deposit' && t.status === 'validated').length;
+                  const depositTotalSum = transactions.filter(t => t.type === 'deposit' && t.status === 'validated').reduce((sum, t) => sum + t.amount, 0);
+
+                  const withdrawalCount = transactions.filter(t => t.type === 'withdrawal').length;
+                  const validatedWithdrawalCount = transactions.filter(t => t.type === 'withdrawal' && t.status === 'validated').length;
+                  const withdrawalTotalSum = transactions.filter(t => t.type === 'withdrawal' && t.status === 'validated').reduce((sum, t) => sum + t.amount, 0);
+
+                  // Users activity: active vs inactive
+                  const totalUsersCount = allUsers.length;
+                  const activeUsersCount = allUsers.filter(u => 
+                    transactions.some(t => t.userPhone === u.phone && t.status === 'validated')
+                  ).length;
+                  const inactiveUsersCount = Math.max(0, totalUsersCount - activeUsersCount);
+
+                  // Referral calculations:
+                  const sponsorBalanceTotal = allUsers.reduce((sum, u) => sum + (u.balanceCommission || 0), 0);
+                  const sponsorWithdrawnTotal = allUsers.reduce((sum, u) => sum + (u.balanceCommissionWithdrawn || 0), 0);
+                  const sponsorAccumulatedTotal = sponsorBalanceTotal + sponsorWithdrawnTotal;
+
+                  return (
+                    <div className="space-y-6 animate-fade-in text-gray-100 pb-10">
+                      
+                      {/* Operational Cards */}
+                      <div>
+                        <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 font-display">
+                          <TrendingUp size={14} />
+                          Opérations de la plateforme
+                        </h4>
+                        <div className="grid grid-cols-2 gap-3.5">
+                          <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+                            <div>
+                              <p className="text-[10px] text-gray-400 font-bold tracking-wider uppercase mb-1">Dépôts validés</p>
+                              <p className="text-base font-extrabold font-mono text-[#00f0ff]">{depositTotalSum.toLocaleString()} FCFA</p>
+                            </div>
+                            <span className="text-[9px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded w-fit mt-3.5 font-mono font-bold">
+                              {validatedDepositCount}/{depositCount} validés
+                            </span>
+                          </div>
+
+                          <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex flex-col justify-between shadow-lg">
+                            <div>
+                              <p className="text-[10px] text-gray-400 font-bold tracking-wider uppercase mb-1">Retraits validés</p>
+                              <p className="text-base font-extrabold font-mono text-pink-400">{withdrawalTotalSum.toLocaleString()} FCFA</p>
+                            </div>
+                            <span className="text-[9px] text-pink-400 bg-pink-500/10 px-2 py-0.5 rounded w-fit mt-3.5 font-mono font-bold">
+                              {validatedWithdrawalCount}/{withdrawalCount} validés
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4">
-                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-1">Volume Retraits validés</p>
-                        <p className="text-lg font-black font-mono text-pink-400">{withdrawalTotalVolume.toLocaleString()} F</p>
+                      {/* Parrainage Stats */}
+                      <div>
+                        <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 font-display">
+                          <Users size={14} />
+                          Système d'Affiliation (Parrainage)
+                        </h4>
+                        <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-4 shadow-xl">
+                          <div className="flex justify-between items-center pb-3 border-b border-slate-800/60">
+                            <div>
+                              <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider block">Gains cumulés parrains</span>
+                              <span className="text-lg font-black font-mono text-yellow-550">{sponsorAccumulatedTotal.toLocaleString()} FCFA</span>
+                            </div>
+                            <span className="p-2.5 bg-yellow-500/10 text-yellow-400 rounded-xl">
+                              <Wallet size={18} />
+                            </span>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-4 text-xs">
+                            <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                              <span className="text-[9px] text-gray-400 uppercase font-bold block mb-1">Gains Payés / Retirés</span>
+                              <span className="font-mono text-emerald-450 font-extrabold text-sm">{sponsorWithdrawnTotal.toLocaleString()} F</span>
+                            </div>
+
+                            <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
+                              <span className="text-[9px] text-gray-400 uppercase font-bold block mb-1">Gains en attente</span>
+                              <span className="font-mono text-amber-500 font-extrabold text-sm">{sponsorBalanceTotal.toLocaleString()} F</span>
+                            </div>
+                          </div>
+                        </div>
                       </div>
 
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4">
-                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-1">Commissions Versées</p>
-                        <p className="text-lg font-black font-mono text-yellow-500">{totalCommissionDisbursed.toLocaleString()} F</p>
+                      {/* Inscriptions Stats */}
+                      <div>
+                        <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 font-display">
+                          <CheckCircle2 size={14} />
+                          Activité des Utilisateurs
+                        </h4>
+                        <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-4 shadow-xl">
+                          <div className="flex justify-between items-center">
+                            <div>
+                              <span className="text-[9px] font-bold text-gray-400 uppercase tracking-wider block">Inscriptions totales</span>
+                              <span className="text-2xl font-mono text-white font-extrabold">{totalUsersCount}</span>
+                            </div>
+                            <div className="flex gap-1.5">
+                              <div className="text-center px-2.5 py-1.5 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+                                <span className="text-[8px] font-bold text-emerald-400 block uppercase">Actifs</span>
+                                <span className="text-xs font-bold text-white font-mono">{activeUsersCount}</span>
+                              </div>
+                              <div className="text-center px-2.5 py-1.5 rounded-xl bg-slate-900 border border-slate-800">
+                                <span className="text-[8px] font-bold text-gray-400 block uppercase">Inactifs</span>
+                                <span className="text-xs font-bold text-gray-400 font-mono">{inactiveUsersCount}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Progress visualizer bar */}
+                          {totalUsersCount > 0 && (
+                            <div className="space-y-1.5">
+                              <div className="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden flex">
+                                <div 
+                                  className="h-full bg-gradient-to-r from-emerald-500 to-teal-400 rounded-full" 
+                                  style={{ width: `${Math.round((activeUsersCount / totalUsersCount) * 100)}%` }} 
+                                />
+                              </div>
+                              <div className="flex justify-between text-[9px] font-bold text-gray-500 uppercase font-mono">
+                                <span>Taux d'activité : {Math.round((activeUsersCount / totalUsersCount) * 100)}%</span>
+                                <span>{activeUsersCount} sur {totalUsersCount}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4">
-                        <p className="text-[10px] text-gray-400 uppercase tracking-widest font-bold mb-1">Revenus d'opérations (est.)</p>
-                        <p className="text-lg font-black font-mono text-white">{platformRevenue.toLocaleString()} F</p>
+                    </div>
+                  );
+                })()}
+
+                {/* 6. ADMINISTRATION: REAL-TIME USERS list AND ACCOUNT DELETION */}
+                {adminTab === 'users' && (() => {
+                  const filteredUsersList = allUsers.filter(u => {
+                    const q = usersSearchQuery.toLowerCase().trim();
+                    if (!q) return true;
+                    return u.name.toLowerCase().includes(q) || u.phone.includes(q);
+                  });
+
+                  const handleDeleteUserClick = async (phone: string, name: string) => {
+                    if (!window.confirm(`⚠️ ATTENTION ! Voulez-vous vraiment supprimer définitivement le compte de ${name} (${phone}) ? Cette action est irréversible.`)) {
+                      return;
+                    }
+                    try {
+                      await dbService.deleteUser(phone);
+                      fetchAdminTransactions();
+                      showToast(`Compte de ${name} supprimé avec succès ! 🗑️`, 'success');
+                    } catch (e: any) {
+                      showToast("Erreur lors de la suppression de l'utilisateur.", 'error');
+                    }
+                  };
+
+                  return (
+                    <div className="space-y-4 animate-fade-in pb-10">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-sm font-extrabold uppercase font-display tracking-wider text-gray-200 font-display">Utilisateurs inscrits</h3>
+                        <span className="text-[10px] bg-slate-950 uppercase border border-slate-800 text-gray-400 px-2.5 py-1 rounded-full font-bold">
+                          {filteredUsersList.length} Utilisateurs
+                        </span>
+                      </div>
+
+                      {/* Search bar */}
+                      <div className="relative">
+                        <input
+                          type="text"
+                          placeholder="Rechercher par nom ou numéro..."
+                          className="w-full bg-[#111a33] border border-slate-800 rounded-xl pl-4 pr-10 py-2.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-cyan-500/50"
+                          value={usersSearchQuery}
+                          onChange={(e) => setUsersSearchQuery(e.target.value)}
+                        />
+                        <span className="absolute right-3.5 top-3 text-gray-500">
+                          <Users size={14} />
+                        </span>
+                      </div>
+
+                      {/* Users lists results */}
+                      <div className="space-y-3">
+                        {filteredUsersList.length === 0 ? (
+                          <div className="text-center py-12 text-gray-400 text-xs border border-dashed border-slate-800 rounded-3xl">
+                            Aucun utilisateur trouvé.
+                          </div>
+                        ) : (
+                          filteredUsersList.map((usr) => {
+                            const isUserActive = transactions.some(t => t.userPhone === usr.phone && t.status === 'validated');
+                            return (
+                              <div key={usr.phone} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 shadow-md">
+                                <div className="flex justify-between items-start">
+                                  <div>
+                                    <div className="flex items-center gap-1.5">
+                                      <h5 className="text-xs font-bold text-white uppercase">{usr.name}</h5>
+                                      {isUserActive ? (
+                                        <span className="text-[8px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-1.5 py-0.2 rounded font-bold uppercaseScale">Actif</span>
+                                      ) : (
+                                        <span className="text-[8px] bg-slate-800 text-gray-400 border border-slate-700 px-1.5 py-0.2 rounded font-bold uppercaseScale">Inactif</span>
+                                      )}
+                                    </div>
+                                    <p className="text-[11px] font-mono text-cyan-400 font-semibold mt-0.5">{usr.phone}</p>
+                                  </div>
+                                  {usr.role !== 'admin' && (
+                                    <button
+                                      onClick={() => handleDeleteUserClick(usr.phone, usr.name)}
+                                      className="p-2 border border-red-500/25 bg-red-500/5 hover:bg-red-500/15 text-red-400 rounded-xl transition-all cursor-pointer"
+                                      title="Supprimer cet utilisateur"
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                  )}
+                                </div>
+
+                                <div className="grid grid-cols-2 gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-900 text-[10px]">
+                                  <div>
+                                    <span className="text-gray-500 block uppercase font-bold tracking-tight mb-0.5">Commissions dispo</span>
+                                    <span className="font-mono text-yellow-500 font-bold">{usr.balanceCommission.toLocaleString()} FCFA</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-gray-500 block uppercase font-bold tracking-tight mb-0.5">Commissions retirées</span>
+                                    <span className="font-mono text-emerald-400 font-bold">{usr.balanceCommissionWithdrawn.toLocaleString()} FCFA</span>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
                       </div>
                     </div>
-
-                    {/* Operational chart visualizer */}
-                    <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4">
-                      <h4 className="text-xs font-bold text-gray-300 mb-3">Flux d'opérations validées</h4>
-                      <div className="h-32 flex items-end justify-between gap-4 pt-4 px-2">
-                        <div className="flex-1 flex flex-col items-center gap-1.5">
-                          <div className="w-full bg-[#1b2b52] rounded shadow-inner relative" style={{ height: `${Math.min(100, Math.max(20, depositTotalVolume / 3000))}px` }}>
-                            <div className="absolute inset-0 bg-cyan-400 opacity-20 rounded" />
-                          </div>
-                          <span className="text-[9px] text-gray-400 font-semibold font-display">Dépôts</span>
-                        </div>
-
-                        <div className="flex-1 flex flex-col items-center gap-1.5">
-                          <div className="w-full bg-[#1b2b52] rounded shadow-inner relative" style={{ height: `${Math.min(100, Math.max(20, withdrawalTotalVolume / 3000))}px` }}>
-                            <div className="absolute inset-0 bg-pink-400 opacity-20 rounded" />
-                          </div>
-                          <span className="text-[9px] text-gray-400 font-semibold font-display">Retraits</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                  );
+                })()}
 
                 {/* 4. ADMINISTRATION: MANUAL PRONOS MANAGEMENT PANEL */}
                 {adminTab === 'pronos' && (() => {
@@ -3366,10 +3588,12 @@ export default function App() {
           href={`https://wa.me/${config.supportWhatsapp.replace('+', '')}`}
           target="_blank"
           rel="noopener noreferrer"
-          title="Contacter le Support"
-          className="fixed bottom-20 right-1/2 translate-x-[180px] z-50 w-12 h-12 rounded-full bg-emerald-500 text-slate-950 hover:bg-emerald-400 shadow-xl flex items-center justify-center transition-transform hover:scale-110 shadow-emerald-500/10 cursor-pointer animate-bounce"
+          title="Contacter le Support WhatsApp"
+          className="fixed bottom-20 right-1/2 translate-x-[180px] z-50 w-12 h-12 rounded-full bg-[#25D366] text-white hover:bg-[#128C7E] shadow-xl flex items-center justify-center transition-transform hover:scale-110 shadow-emerald-500/30 cursor-pointer animate-bounce"
         >
-          <Phone size={22} fill="currentColor" />
+          <svg viewBox="0 0 24 24" fill="currentColor" className="w-[24px] h-[24px]">
+            <path d="M12.012 2c-5.506 0-9.988 4.471-9.988 9.978 0 1.764.46 3.42 1.263 4.869L2 22l5.318-1.393c1.401.764 2.99 1.199 4.68 1.199 5.506 0 10-4.471 10-9.978C22.012 6.471 17.518 2 12.012 2zm6.273 14.153c-.274.776-1.571 1.408-2.158 1.482-.572.074-1.284.14-3.791-.861-3.21-1.282-5.228-4.544-5.385-4.757-.156-.214-1.284-1.713-1.284-3.27 0-1.558.802-2.325 1.096-2.618.293-.294.636-.367.847-.367.21 0 .422.001.606.01.2.009.467-.076.732.569.274.673.931 2.274 1.01 2.433.08.16.133.344.027.553-.105.21-.157.344-.316.524-.157.18-.328.401-.469.539-.157.152-.321.319-.138.634.183.314.811 1.336 1.737 2.158.919.814 1.696 1.066 2.008 1.223.312.157.5.133.687-.08.187-.214.802-.931 1.01-1.25.21-.318.42-.267.712-.162.293.105 1.865.88 2.178 1.037.312.157.525.234.603.366.078.132.078.761-.196 1.537z" />
+          </svg>
         </a>
       )}
 

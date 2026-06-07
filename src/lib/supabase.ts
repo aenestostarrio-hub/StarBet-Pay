@@ -1195,6 +1195,76 @@ export const dbService = {
     }
   },
 
+  async getUsers(): Promise<DBUser[]> {
+    if (isSupabaseConfigured && supabase) {
+      const { data, error } = await supabase
+        .from('sb_users')
+        .select('*');
+      
+      if (error) throw error;
+      return (data || []).map(u => ({
+        phone: u.phone,
+        name: u.name,
+        role: u.role as any,
+        passwordHash: u.password_hash,
+        parentPhone: u.parent_phone,
+        referralCode: u.referral_code,
+        balanceCommission: Number(u.balance_commission),
+        balanceCommissionWithdrawn: Number(u.balance_commission_withdrawn),
+        mfaEnabled: u.mfa_enabled,
+        createdAt: u.created_at
+      }));
+    } else if (useLocalStorageSandbox) {
+      const db = getLocalDB();
+      return Object.values(db.users);
+    } else {
+      try {
+        const res = await customFetch('/api/users');
+        const data = await res.json();
+        if (data && data.error === "STANDALONE_FALLBACK") {
+          useLocalStorageSandbox = true;
+          return Object.values(getLocalDB().users);
+        }
+        return data.users;
+      } catch (e) {
+        useLocalStorageSandbox = true;
+        return Object.values(getLocalDB().users);
+      }
+    }
+  },
+
+  async deleteUser(phone: string): Promise<void> {
+    if (isSupabaseConfigured && supabase) {
+      const { error } = await supabase
+        .from('sb_users')
+        .delete()
+        .eq('phone', phone);
+      if (error) throw error;
+    } else if (useLocalStorageSandbox) {
+      const db = getLocalDB();
+      delete db.users[phone];
+      saveLocalDB(db);
+    } else {
+      try {
+        const res = await customFetch(`/api/users/${phone}`, {
+          method: 'DELETE'
+        });
+        const data = await res.json();
+        if (data && data.error === "STANDALONE_FALLBACK") {
+          useLocalStorageSandbox = true;
+          const db = getLocalDB();
+          delete db.users[phone];
+          saveLocalDB(db);
+        }
+      } catch (e) {
+        useLocalStorageSandbox = true;
+        const db = getLocalDB();
+        delete db.users[phone];
+        saveLocalDB(db);
+      }
+    }
+  },
+
   // Transactions Operations
   async getTransactions(phone?: string): Promise<DBTransaction[]> {
     if (isSupabaseConfigured && supabase) {

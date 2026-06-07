@@ -530,6 +530,23 @@ async function startServer() {
     res.json({ message: 'Demande de retrait de gain effectuée avec succès.', user, transaction: newTx });
   });
 
+  // Get all users
+  app.get('/api/users', (req, res) => {
+    const db = getDB();
+    res.json({ users: Object.values(db.users) });
+  });
+
+  // Delete an user
+  app.delete('/api/users/:phone', (req, res) => {
+    const { phone } = req.params;
+    const db = getDB();
+    if (db.users[phone]) {
+      delete db.users[phone];
+      saveDB(db);
+    }
+    res.json({ success: true });
+  });
+
   // Get users referral stats
   app.get('/api/users/stats/:phone', (req, res) => {
     const { phone } = req.params;
