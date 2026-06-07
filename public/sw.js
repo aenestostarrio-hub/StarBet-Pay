@@ -3,8 +3,10 @@ const CACHE_NAME = 'starbetpay-cache-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/src/main.tsx',
-  '/manifest.json'
+  '/manifest.json',
+  '/icon.png',
+  '/icon-192.png',
+  '/icon-512.png'
 ];
 
 // Perform install and cache elementary files

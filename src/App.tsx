@@ -77,9 +77,16 @@ export default function App() {
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [coupons, setCoupons] = useState<SportCoupon[]>([]);
 
+  const knownTxIdsRef = useRef<Set<string>>(new Set());
+  const transactionsRef = useRef<DBTransaction[]>([]);
+
   // Client Side UI Active Tab ('home', 'deposit', 'pronos', 'withdrawal', 'history')
   const [activeTab, setActiveTab] = useState<string>('home');
   const [transactions, setTransactions] = useState<DBTransaction[]>([]);
+
+  useEffect(() => {
+    transactionsRef.current = transactions;
+  }, [transactions]);
 
   // Forms / Input State
   const [depositForm, setDepositForm] = useState({
@@ -340,50 +347,61 @@ export default function App() {
     }
   }, [user]);
 
-  // Establish Real-Time or Polling notifications for administrators
+  // Establish Real-Time or Polling notifications for administrators & clients
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let pollInterval: any = null;
-    
-    if (user && user.role === 'admin') {
-      if (isSupabaseConfigured || useLocalStorageSandbox) {
-        // Direct polling to avoid SSE / server failure on Vercel or Sandbox
-        let lastCount = transactions.length;
-        pollInterval = setInterval(async () => {
-          try {
-            const txData = await dbService.getTransactions();
-            if (txData.length > lastCount) {
-              const newTxs = txData.slice(0, txData.length - lastCount);
-              newTxs.forEach(tx => {
-                playChimeNotification();
-                setAdminNotifications(prev => [tx, ...prev]);
-              });
-              setTransactions(txData);
-            }
-            lastCount = txData.length;
-          } catch (e) {
-            console.warn('Real-time poll error:', e);
-          }
-        }, 8000);
-      } else {
+
+    const triggerNativeNotification = (title: string, body: string) => {
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification(title, {
+            body,
+            icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+          });
+        }
+      } catch (e) {
+        console.warn("Native desktop notification helper:", e);
+      }
+    };
+
+    if (!user) {
+      knownTxIdsRef.current.clear();
+      return;
+    }
+
+    // A. SYNC WORKER FOR ADMINISTRATORS
+    if (user.role === 'admin') {
+      // 1. Setup SSE connection (if local standalone fallback is not active)
+      if (!isSupabaseConfigured && !useLocalStorageSandbox) {
         try {
           eventSource = new EventSource('/api/admin/notifications-sse');
           
           eventSource.onmessage = (event) => {
             try {
-              const newTxListObj = JSON.parse(event.data) as DBTransaction;
-              console.log('[SSE Real-time notification received]:', newTxListObj);
-              
-              // Auditory notification buzzer simulation
-              playChimeNotification();
+              const data = JSON.parse(event.data);
+              if (data && data.heartbeat) {
+                return; // skip heartbeat raw pings
+              }
+              const tx = data as DBTransaction;
+              if (tx && tx.id && !knownTxIdsRef.current.has(tx.id)) {
+                knownTxIdsRef.current.add(tx.id);
+                playChimeNotification();
+                setAdminNotifications(prev => {
+                  if (prev.some(p => p.id === tx.id)) return prev;
+                  return [tx, ...prev];
+                });
+                
+                // Show alerts
+                const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                showToast(notifyMsg, 'info');
+                triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
 
-              // Push into live banner list
-              setAdminNotifications(prev => [newTxListObj, ...prev]);
-
-              // Refresh current table transactions
-              fetchAdminTransactions();
-            } catch (error) {
-              console.error('[SSE event source failure]:', error);
+                // Refresh current tables
+                fetchAdminTransactions();
+              }
+            } catch (err) {
+              console.error('[SSE event processing failed]:', err);
             }
           };
 
@@ -394,17 +412,94 @@ export default function App() {
           console.warn('EventSource initialization bypassed: ', err);
         }
       }
+
+      // 2. Active, ultra-robust background polling fallback every 3.5 seconds
+      pollInterval = setInterval(async () => {
+        try {
+          const freshTxs = await dbService.getTransactions();
+          
+          // Populate reference set if raw empty on mount
+          if (knownTxIdsRef.current.size === 0) {
+            freshTxs.forEach(t => knownTxIdsRef.current.add(t.id));
+            setTransactions(freshTxs);
+            return;
+          }
+
+          freshTxs.forEach(tx => {
+            if (!knownTxIdsRef.current.has(tx.id)) {
+              knownTxIdsRef.current.add(tx.id);
+              
+              playChimeNotification();
+              setAdminNotifications(prev => {
+                if (prev.some(p => p.id === tx.id)) return prev;
+                return [tx, ...prev];
+              });
+              
+              // Trigger desktop & in-app alerts
+              const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+              showToast(notifyMsg, 'info');
+              triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
+            }
+          });
+
+          // Update transactions list
+          setTransactions(freshTxs);
+
+          // Periodically load baseline active users
+          const usersData = await dbService.getUsers();
+          setAllUsers(usersData);
+        } catch (e) {
+          console.warn('Admin background sync loop issue:', e);
+        }
+      }, 3500);
+
+    } 
+    // B. SYNC WORKER FOR CLIENTS (REGULAR USERS)
+    else {
+      // Setup client automatic synchronization polling every 3.5 seconds
+      pollInterval = setInterval(async () => {
+        try {
+          // 1. Fetch user transactions list
+          const freshTxs = await dbService.getTransactions(user.phone);
+          
+          // Detect status transitions (pending -> validated/rejected)
+          transactionsRef.current.forEach(oldTx => {
+            const correspondingFresh = freshTxs.find(f => f.id === oldTx.id);
+            if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
+              if (correspondingFresh.status === 'validated') {
+                playChimeNotification();
+                const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
+                showToast(text, 'success');
+                triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
+              } else if (correspondingFresh.status === 'rejected') {
+                playChimeNotification();
+                const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
+                showToast(text, 'error');
+                triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
+              }
+            }
+          });
+
+          setTransactions(freshTxs);
+
+          // 2. Fetch user parent/referral stats
+          const freshStats = await dbService.getUserStats(user.phone);
+          setRefStats(freshStats);
+
+          // 3. Keep sport coupons & popup settings up to date
+          const freshCoupons = await dbService.getCoupons();
+          setCoupons(freshCoupons);
+        } catch (e) {
+          console.warn('Client background sync loop issue:', e);
+        }
+      }, 3500);
     }
 
     return () => {
-      if (eventSource) {
-        eventSource.close();
-      }
-      if (pollInterval) {
-        clearInterval(pollInterval);
-      }
+      if (pollInterval) clearInterval(pollInterval);
+      if (eventSource) eventSource.close();
     };
-  }, [user, transactions.length]);
+  }, [user]);
 
   // Handle generic clipboard copies with robust iframe fallback support
   const handleCopyToClipboard = (text: string) => {
