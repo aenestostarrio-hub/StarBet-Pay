@@ -9,10 +9,56 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { dbService, isSupabaseConfigured, useLocalStorageSandbox } from './lib/supabase';
 
+// Global shared AudioContext to bypass modern browser autoplay restrictions elegantly
+let sharedAudioCtx: AudioContext | null = null;
+
+function getAudioContext(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  if (!sharedAudioCtx) {
+    sharedAudioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+  }
+  return sharedAudioCtx;
+}
+
+// Automatically resume and unlock the AudioContext on any real interaction with the screen
+if (typeof window !== 'undefined') {
+  const unlockAudio = () => {
+    const ctx = getAudioContext();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().then(() => {
+        console.log('[StarBetPay] AudioContext successfully authorized inside user session. 🎉');
+        // Play an ultra-short silence to force hardware audio pipe activation
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        gain.gain.setValueAtTime(0, ctx.currentTime);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start(0);
+        osc.stop(0.01);
+        
+        window.removeEventListener('click', unlockAudio);
+        window.removeEventListener('touchstart', unlockAudio);
+      }).catch(e => console.warn('Failed to unlock Audio:', e));
+    } else if (ctx && ctx.state === 'running') {
+      window.removeEventListener('click', unlockAudio);
+      window.removeEventListener('touchstart', unlockAudio);
+    }
+  };
+  window.addEventListener('click', unlockAudio);
+  window.addEventListener('touchstart', unlockAudio);
+}
+
 // Web audio API programmatic chime synthesizer to alert the admin
 function playChimeNotification() {
   try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const audioCtx = getAudioContext();
+    if (!audioCtx) return;
+
+    if (audioCtx.state === 'suspended') {
+      audioCtx.resume();
+    }
+    
+    const now = audioCtx.currentTime;
     
     // Low crisp tone
     const osc1 = audioCtx.createOscillator();
@@ -21,12 +67,12 @@ function playChimeNotification() {
     gain1.connect(audioCtx.destination);
     
     osc1.type = 'sine';
-    osc1.frequency.setValueAtTime(587.33, audioCtx.currentTime); // D5
-    gain1.gain.setValueAtTime(0.15, audioCtx.currentTime);
-    gain1.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.4);
+    osc1.frequency.setValueAtTime(587.33, now); // D5
+    gain1.gain.setValueAtTime(0.15, now);
+    gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.4);
     
-    osc1.start(audioCtx.currentTime);
-    osc1.stop(audioCtx.currentTime + 0.4);
+    osc1.start(now);
+    osc1.stop(now + 0.4);
 
     // High sparkling tone
     const osc2 = audioCtx.createOscillator();
@@ -35,12 +81,12 @@ function playChimeNotification() {
     gain2.connect(audioCtx.destination);
     
     osc2.type = 'sine';
-    osc2.frequency.setValueAtTime(880, audioCtx.currentTime + 0.1); // A5
-    gain2.gain.setValueAtTime(0.15, audioCtx.currentTime + 0.1);
-    gain2.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.5);
+    osc2.frequency.setValueAtTime(880, now + 0.1); // A5
+    gain2.gain.setValueAtTime(0.15, now + 0.1);
+    gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
     
-    osc2.start(audioCtx.currentTime + 0.1);
-    osc2.stop(audioCtx.currentTime + 0.5);
+    osc2.start(now + 0.1);
+    osc2.stop(now + 0.5);
   } catch (error) {
     console.warn('Audio Context block / play error:', error);
   }
@@ -293,11 +339,14 @@ export default function App() {
     }
   };
 
-  // Fetch client specific transactions and referral stats
+// Fetch client specific transactions and referral stats
   const fetchClientUserData = async (phone: string) => {
     try {
       const txData = await dbService.getTransactions(phone);
       setTransactions(txData);
+      
+      // Seed the known transaction state to prevent false alarms on historic list
+      txData.forEach(tx => knownTxIdsRef.current.add(tx.id));
 
       const statsData = await dbService.getUserStats(phone);
       setRefStats(statsData);
@@ -311,6 +360,9 @@ export default function App() {
     try {
       const txData = await dbService.getTransactions();
       setTransactions(txData);
+      
+      // Seed the known transaction state immediately to detect new arrivals in real-time
+      txData.forEach(tx => knownTxIdsRef.current.add(tx.id));
       
       const usersData = await dbService.getUsers();
       setAllUsers(usersData);
@@ -413,32 +465,34 @@ export default function App() {
         }
       }
 
-      // 2. Active, ultra-robust background polling fallback every 3.5 seconds
+      // 2. Active, ultra-robust background polling fallback every 2.0 seconds
       pollInterval = setInterval(async () => {
         try {
           const freshTxs = await dbService.getTransactions();
           
           // Populate reference set if raw empty on mount
-          if (knownTxIdsRef.current.size === 0) {
+          const isFirstRun = knownTxIdsRef.current.size === 0;
+          if (isFirstRun) {
             freshTxs.forEach(t => knownTxIdsRef.current.add(t.id));
-            setTransactions(freshTxs);
-            return;
           }
 
           freshTxs.forEach(tx => {
             if (!knownTxIdsRef.current.has(tx.id)) {
               knownTxIdsRef.current.add(tx.id);
               
-              playChimeNotification();
-              setAdminNotifications(prev => {
-                if (prev.some(p => p.id === tx.id)) return prev;
-                return [tx, ...prev];
-              });
-              
-              // Trigger desktop & in-app alerts
-              const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
-              showToast(notifyMsg, 'info');
-              triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
+              // Only trigger chime if it's not the first loading list execution
+              if (!isFirstRun) {
+                playChimeNotification();
+                setAdminNotifications(prev => {
+                  if (prev.some(p => p.id === tx.id)) return prev;
+                  return [tx, ...prev];
+                });
+                
+                // Trigger desktop & in-app alerts
+                const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                showToast(notifyMsg, 'info');
+                triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
+              }
             }
           });
 
@@ -451,12 +505,12 @@ export default function App() {
         } catch (e) {
           console.warn('Admin background sync loop issue:', e);
         }
-      }, 3500);
+      }, 2000);
 
     } 
     // B. SYNC WORKER FOR CLIENTS (REGULAR USERS)
     else {
-      // Setup client automatic synchronization polling every 3.5 seconds
+      // Setup client automatic synchronization polling every 2.0 seconds
       pollInterval = setInterval(async () => {
         try {
           // 1. Fetch user transactions list
@@ -492,7 +546,7 @@ export default function App() {
         } catch (e) {
           console.warn('Client background sync loop issue:', e);
         }
-      }, 3500);
+      }, 2000);
     }
 
     return () => {

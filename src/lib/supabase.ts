@@ -24,6 +24,16 @@ if (typeof window !== 'undefined') {
       useLocalStorageSandbox = true;
     }
   }
+
+  // Force-keep useLocalStorageSandbox false on AI Studio Preview runtime to preserve shared database synchronization
+  if (isAIStudioPreview) {
+    setInterval(() => {
+      if (useLocalStorageSandbox) {
+        console.warn("[StarBetPay] Prevented fallback to isolated local browser database sandbox to maintain active Express API server connection.");
+        useLocalStorageSandbox = false;
+      }
+    }, 100);
+  }
 }
 
 // local storage keys and initialization database
