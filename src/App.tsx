@@ -171,6 +171,8 @@ export default function App() {
   const [allUsers, setAllUsers] = useState<DBUser[]>([]);
   const [usersSearchQuery, setUsersSearchQuery] = useState('');
   
+  const [adminLoadingTxId, setAdminLoadingTxId] = useState<string | null>(null);
+  
   // Client interactive overlay modal state
   const [isClientPopupDismissed, setIsClientPopupDismissed] = useState<boolean>(() => {
     try {
@@ -820,12 +822,15 @@ export default function App() {
 
   // Action: Admin updates status of a transaction (Approve / Reject / Reset)
   const handleAdminUpdateStatus = async (txId: string, status: 'pending' | 'validated' | 'rejected') => {
+    if (adminLoadingTxId) return; // Prevent concurrent requests
+    
     const reason = adminRejectedReason[txId] || '';
     if (status === 'rejected' && !reason.trim()) {
       showToast('Veuillez saisir un motif de rejet/annulation de la demande.', 'warning');
       return;
     }
 
+    setAdminLoadingTxId(txId);
     try {
       const updatedTx = await dbService.updateTransactionStatus(txId, status, reason);
       setAdminRejectedReason(prev => {
@@ -833,12 +838,14 @@ export default function App() {
         delete next[txId];
         return next;
       });
-      fetchAdminTransactions();
+      await fetchAdminTransactions();
       const statusText = status === 'validated' ? 'validée' : status === 'rejected' ? 'rejetée' : 'remise en attente';
       showToast(`Opération ${statusText} avec succès ! 🎉`, 'success');
     } catch (e: any) {
       console.error(e);
       showToast(e.message || "Erreur lors de la mise à jour.", 'error');
+    } finally {
+      setAdminLoadingTxId(null);
     }
   };
 
@@ -2453,16 +2460,35 @@ export default function App() {
                                       />
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                          className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-400 text-xs font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-2 border border-red-500/30 text-red-400 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-red-500/10 cursor-pointer'
+                                          }`}
                                         >
                                           Annuler / Refuser
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                          className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                          className={`w-1/2 py-2 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-cyan-600 opacity-80 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'bg-cyan-600 opacity-40 cursor-not-allowed'
+                                                : 'bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 cursor-pointer'
+                                          }`}
                                         >
-                                          Valider le dépôt
+                                          {adminLoadingTxId === tx.id ? (
+                                            <>
+                                              <RefreshCw size={12} className="animate-spin text-slate-950" />
+                                              Traitement...
+                                            </>
+                                          ) : (
+                                            'Valider le dépôt'
+                                          )}
                                         </button>
                                       </div>
                                     </div>
@@ -2482,15 +2508,30 @@ export default function App() {
                                       />
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border border-slate-700 text-xs text-gray-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-slate-800 cursor-pointer'
+                                          }`}
                                           title="Remettre cette opération à l'état en attente de vérification"
                                         >
+                                          {adminLoadingTxId === tx.id ? (
+                                            <RefreshCw size={11} className="animate-spin text-gray-300" />
+                                          ) : null}
                                           Remettre En attente
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                          className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-red-950/20 border-red-500/20 text-red-500/50 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'opacity-45 cursor-not-allowed'
+                                                : 'bg-red-950/50 hover:bg-red-900/60 border-red-500/30 text-red-400 cursor-pointer'
+                                          }`}
                                         >
                                           Annuler de force
                                         </button>
@@ -2505,15 +2546,30 @@ export default function App() {
                                       </span>
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border border-slate-700 text-xs text-gray-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-slate-800 cursor-pointer'
+                                          }`}
                                         >
                                           Rétablir l'opération
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                          className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-cyan-950/20 border-cyan-500/20 text-cyan-500/50 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'opacity-45 cursor-not-allowed'
+                                                : 'bg-cyan-950/50 hover:bg-cyan-900/60 border-cyan-500/30 text-cyan-400 cursor-pointer'
+                                          }`}
                                         >
+                                          {adminLoadingTxId === tx.id ? (
+                                            <RefreshCw size={11} className="animate-spin text-cyan-400" />
+                                          ) : null}
                                           Rétablir et Valider
                                         </button>
                                       </div>
@@ -2616,16 +2672,35 @@ export default function App() {
                                       />
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                          className="w-1/2 py-2 border border-red-500/30 hover:bg-red-500/10 text-red-550 text-xs font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-2 border border-red-500/30 text-red-550 text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-red-500/10 cursor-pointer'
+                                          }`}
                                         >
                                           Annuler / Refuser
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                          className="w-1/2 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all"
+                                          className={`w-1/2 py-2 text-slate-950 text-xs font-black rounded-xl shadow-md transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-cyan-600 opacity-80 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'bg-cyan-600 opacity-40 cursor-not-allowed'
+                                                : 'bg-gradient-to-tr from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 cursor-pointer'
+                                          }`}
                                         >
-                                          Valider le retrait
+                                          {adminLoadingTxId === tx.id ? (
+                                            <>
+                                              <RefreshCw size={12} className="animate-spin text-slate-950" />
+                                              Traitement...
+                                            </>
+                                          ) : (
+                                            'Valider le retrait'
+                                          )}
                                         </button>
                                       </div>
                                     </div>
@@ -2645,15 +2720,30 @@ export default function App() {
                                       />
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border border-slate-700 text-xs text-gray-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-slate-800 cursor-pointer'
+                                          }`}
                                           title="Remettre cette opération à l'état en attente de vérification"
                                         >
+                                          {adminLoadingTxId === tx.id ? (
+                                            <RefreshCw size={11} className="animate-spin text-gray-300" />
+                                          ) : null}
                                           Remettre En attente
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'rejected')}
-                                          className="w-1/2 py-1.5 bg-red-950/50 hover:bg-red-900/60 border border-red-500/30 text-xs text-red-400 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-red-950/20 border-red-500/20 text-red-550 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'opacity-45 cursor-not-allowed'
+                                                : 'bg-red-950/50 hover:bg-red-900/60 border-red-500/30 text-red-400 cursor-pointer'
+                                          }`}
                                         >
                                           Annuler de force
                                         </button>
@@ -2668,15 +2758,30 @@ export default function App() {
                                       </span>
                                       <div className="flex gap-2">
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'pending')}
-                                          className="w-1/2 py-1.5 border border-slate-700 hover:bg-slate-800 text-xs text-gray-300 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border border-slate-700 text-xs text-gray-300 font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId !== null
+                                              ? 'opacity-40 cursor-not-allowed'
+                                              : 'hover:bg-slate-800 cursor-pointer'
+                                          }`}
                                         >
                                           Remettre En attente
                                         </button>
                                         <button
+                                          disabled={adminLoadingTxId !== null}
                                           onClick={() => handleAdminUpdateStatus(tx.id, 'validated')}
-                                          className="w-1/2 py-1.5 bg-cyan-950/50 hover:bg-cyan-900/60 border border-cyan-500/30 text-xs text-cyan-400 font-bold rounded-xl transition-all"
+                                          className={`w-1/2 py-1.5 border text-xs font-bold rounded-xl transition-all flex items-center justify-center gap-1.5 ${
+                                            adminLoadingTxId === tx.id
+                                              ? 'bg-cyan-950/20 border-cyan-500/20 text-cyan-500/50 cursor-not-allowed'
+                                              : adminLoadingTxId !== null
+                                                ? 'opacity-45 cursor-not-allowed'
+                                                : 'bg-cyan-950/50 hover:bg-cyan-900/60 border-cyan-500/30 text-cyan-400 cursor-pointer'
+                                          }`}
                                         >
+                                          {adminLoadingTxId === tx.id ? (
+                                            <RefreshCw size={11} className="animate-spin text-cyan-400" />
+                                          ) : null}
                                           Rétablir et Valider
                                         </button>
                                       </div>

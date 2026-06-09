@@ -20,16 +20,17 @@ if (typeof window !== 'undefined') {
   const isAIStudioPreview = hn.includes('run.app') || hn.includes('localhost') || hn.includes('127.0.0.1');
   
   if (!isSupabaseConfigured) {
-    if (isVercel || !isAIStudioPreview) {
+    if (isAIStudioPreview) {
+      useLocalStorageSandbox = false;
+    } else if (isVercel || !isAIStudioPreview) {
       useLocalStorageSandbox = true;
     }
   }
 
-  // Force-keep useLocalStorageSandbox false on AI Studio Preview runtime to preserve shared database synchronization
+  // Double-safeguard fallback prevention on AI Studio runtime
   if (isAIStudioPreview) {
     setInterval(() => {
       if (useLocalStorageSandbox) {
-        console.warn("[StarBetPay] Prevented fallback to isolated local browser database sandbox to maintain active Express API server connection.");
         useLocalStorageSandbox = false;
       }
     }, 100);
@@ -201,14 +202,30 @@ function saveLocalDB(db: DBState) {
   localStorage.setItem(LOCAL_DB_KEY, JSON.stringify(db));
 }
 
-// Safe Custom Fetch client with auto standalone fallback routing detection
+// Safe Custom Fetch client with auto standalone fallback routing detection and URL Cache-busting
 const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
   const originalFetch = window.fetch || fetch;
+  const hn = typeof window !== 'undefined' ? window.location.hostname : '';
+  const isAIStudioPreview = hn.includes('run.app') || hn.includes('localhost') || hn.includes('127.0.0.1');
+
   try {
-    const response = await originalFetch(input, init);
+    let finalInput = input;
+    const isGet = !init || !init.method || init.method.toUpperCase() === 'GET';
+    if (isGet) {
+      const urlStr = typeof input === 'string' ? input : (input as any).url || input.toString();
+      if (urlStr.startsWith('/') || urlStr.startsWith('http')) {
+        const separator = urlStr.includes('?') ? '&' : '?';
+        finalInput = `${urlStr}${separator}_cb=${Date.now()}`;
+      }
+    }
+    const response = await originalFetch(finalInput, init);
     const contentType = response.headers.get('content-type') || '';
     if (!contentType.includes('application/json') || response.status === 404) {
-      console.warn("API returned 404 or non-JSON response. Switching to localStorage Sandbox fallback.");
+      console.warn(`API returned status ${response.status} or non-JSON content-type: "${contentType}".`);
+      if (isAIStudioPreview) {
+        // Enforce live connection in AI Studio to keep data consistent.
+        return response;
+      }
       useLocalStorageSandbox = true;
       return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK" }), {
         status: 200,
@@ -217,7 +234,10 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     }
     return response;
   } catch (e) {
-    console.warn("Fetch failed, switching to localStorage Sandbox.");
+    console.warn("Fetch failed:", e);
+    if (isAIStudioPreview) {
+      throw e;
+    }
     useLocalStorageSandbox = true;
     return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK" }), {
       status: 200,

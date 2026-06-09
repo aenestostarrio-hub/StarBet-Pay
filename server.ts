@@ -218,6 +218,14 @@ async function startServer() {
   const app = express();
   app.use(express.json({ limit: '50mb' })); // Allow screenshot uploads
 
+  // Disable all API caching to ensure instant database updates and real-time reflection
+  app.use('/api', (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
+    next();
+  });
+
   // Dynamic API Routes
   
   // Real-time server-sent events for admin notifications
