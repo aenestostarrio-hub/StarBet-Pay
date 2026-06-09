@@ -8,6 +8,8 @@ import {
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { dbService, isSupabaseConfigured, useLocalStorageSandbox } from './lib/supabase';
+// @ts-ignore
+import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
 
 // Global shared AudioContext to bypass modern browser autoplay restrictions elegantly
 let sharedAudioCtx: AudioContext | null = null;
@@ -100,6 +102,7 @@ export default function App() {
   });
   const [tempUser, setTempUser] = useState<any | null>(null);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
+  const [copiedPromo, setCopiedPromo] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
   const [authForm, setAuthForm] = useState({
     phone: '',
@@ -1836,6 +1839,88 @@ export default function App() {
                         })}
                       </div>
 
+                      {/* 1XBET PARTNER PROMO BLOCK */}
+                      <div className="bg-gradient-to-b from-[#111e3b] to-[#0a1125] border border-cyan-500/20 rounded-3xl p-4 md:p-5 shadow-2xl relative overflow-hidden">
+                        <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+                        <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#00f0ff]/5 rounded-full blur-3xl -ml-16 -mb-16 pointer-events-none"></div>
+                        
+                        <div className="flex items-center gap-2 mb-3 bg-[#0a1125]/80 py-1.5 px-3 rounded-full border border-slate-800 self-start w-fit">
+                          <span className="animate-pulse w-2 h-2 rounded-full bg-emerald-400"></span>
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">Offre Partenaire Exclusive 1xBet 🎁</span>
+                        </div>
+
+                        {/* YouTube Style Banner image */}
+                        <div className="relative group overflow-hidden rounded-2xl border border-slate-800 shadow-xl aspect-video w-full mb-4">
+                          <img 
+                            src={promoStarrio} 
+                            alt="1xBet Code Promo STARRIO" 
+                            className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500" 
+                            referrerPolicy="no-referrer"
+                          />
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none"></div>
+                          
+                          <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
+                            <div>
+                              <div className="text-[10px] text-gray-300 font-medium">StarBetPay Partenariat</div>
+                              <div className="text-sm font-black text-white font-display tracking-tight leading-none mt-0.5">Code Promo STARRIO</div>
+                            </div>
+                            <span className="bg-cyan-500 text-slate-950 text-[10px] font-extrabold px-2.5 py-1 rounded-lg uppercase tracking-wider leading-none shadow-lg shadow-cyan-500/20">
+                              +200% Bonus
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-3.5">
+                          <p className="text-gray-300 text-[11px] leading-relaxed">
+                            Créez votre compte dès aujourd'hui sur <strong className="text-white">1xBet</strong> en saisissant le code officiel de parrainage <strong className="text-white text-base font-mono font-black mx-1 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">STARRIO</strong> pour débloquer automatiquement un bonus exceptionnel de <strong className="text-emerald-400 font-extrabold text-xs bg-emerald-500/5 py-1 px-1.5 rounded">+200% sur votre tout premier dépôt</strong> !
+                          </p>
+
+                          {/* Code Copy Box */}
+                          <div className="flex items-center justify-between gap-2.5 bg-[#070b19] border border-slate-800 rounded-2xl p-2.5">
+                            <div className="pl-1.5">
+                              <span className="text-[8px] text-gray-500 uppercase tracking-widest font-black block">Code Promo à Insérer</span>
+                              <span className="text-sm font-black font-mono tracking-wider text-cyan-400">STARRIO</span>
+                            </div>
+                            <button
+                              onClick={() => {
+                                navigator.clipboard.writeText('STARRIO');
+                                setCopiedPromo(true);
+                                showToast('Code promo "STARRIO" copié avec succès ! 📋', 'success');
+                                setTimeout(() => setCopiedPromo(false), 2000);
+                              }}
+                              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                                copiedPromo 
+                                  ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
+                                  : 'bg-[#121c38] border border-slate-700 text-gray-300 hover:text-white hover:border-slate-500 active:scale-95'
+                              }`}
+                            >
+                              {copiedPromo ? (
+                                <>
+                                  <Check size={12} className="text-emerald-400" />
+                                  <span>Copié !</span>
+                                </>
+                              ) : (
+                                <>
+                                  <Copy size={12} />
+                                  <span>Copier le code</span>
+                                </>
+                              )}
+                            </button>
+                          </div>
+
+                          {/* Registration Redirect Button */}
+                          <a
+                            href="https://reffpa.com/L?tag=d_1151631m_97c_&site=1151631&ad=97&r=registration/"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center justify-center gap-2 w-full bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-extrabold font-display text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl text-center shadow-lg shadow-emerald-900/40 active:scale-[0.98] transition-all cursor-pointer"
+                          >
+                            <span>Créer un compte 1xBet</span>
+                            <ArrowUpRight size={14} className="animate-pulse" />
+                          </a>
+                        </div>
+                      </div>
+
                       {/* Coupons du Jour list */}
                       <div className="space-y-4">
                         <div className="flex justify-between items-center px-1">
@@ -1962,7 +2047,7 @@ export default function App() {
                           </div>
                         ) : (
                           <div className="space-y-3">
-                            {pastCoupons.map((coup, idx) => (
+                            {pastCoupons.slice(0, 5).map((coup, idx) => (
                               <div key={coup.id || idx} className="bg-gradient-to-b from-[#111c38]/40 to-[#0c1224]/30 border border-slate-800/80 rounded-2xl p-4">
                                 <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800/40">
                                   <div>
