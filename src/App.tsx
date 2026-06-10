@@ -838,13 +838,60 @@ export default function App() {
     setIsClientPopupDismissed(false);
   };
 
+  // Helper to downscale and compress base64 image using HTML Canvas to fit well within Firestore's 1MB limit
+  const compressImage = (base64Str: string, maxWidth = 800, maxHeight = 800, quality = 0.6): Promise<string> => {
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.src = base64Str;
+      img.onload = () => {
+        let width = img.width;
+        let height = img.height;
+
+        // Calculate aspect ratio and clamp to maxWidth/maxHeight
+        if (width > height) {
+          if (width > maxWidth) {
+            height = Math.round((height * maxWidth) / width);
+            width = maxWidth;
+          }
+        } else {
+          if (height > maxHeight) {
+            width = Math.round((width * maxHeight) / height);
+            height = maxHeight;
+          }
+        }
+
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, width, height);
+          // Export as JPEG with lower quality (0.6 is super efficient, size usually shrinks to 30-50KB)
+          const compressed = canvas.toDataURL('image/jpeg', quality);
+          resolve(compressed);
+        } else {
+          resolve(base64Str);
+        }
+      };
+      img.onerror = () => {
+        resolve(base64Str);
+      };
+    });
+  };
+
   // Action: Handle Screenshot receipt conversion
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       const reader = new FileReader();
-      reader.onloadend = () => {
-        setScreenshotBase64(reader.result as string);
+      reader.onloadend = async () => {
+        const rawBase64 = reader.result as string;
+        try {
+          const compressedBase64 = await compressImage(rawBase64, 800, 800, 0.6);
+          setScreenshotBase64(compressedBase64);
+        } catch {
+          setScreenshotBase64(rawBase64);
+        }
       };
       reader.readAsDataURL(file);
     }
