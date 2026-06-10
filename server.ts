@@ -10,7 +10,7 @@ dotenv.config();
 
 const argv = process.argv;
 const isProd = process.env.NODE_ENV === 'production' || argv.includes('--production');
-const PORT = 3000;
+const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
 // Set up Gemini AI client
 let ai: GoogleGenAI | null = null;
@@ -629,9 +629,22 @@ async function startServer() {
   // Delete an user
   app.delete('/api/users/:phone', (req, res) => {
     const { phone } = req.params;
+    const { role } = req.body;
     const db = getDB();
     if (db.users[phone]) {
       delete db.users[phone];
+      saveDB(db);
+    }
+    res.json({ success: true });
+  });
+
+  // Update user role
+  app.post('/api/users/:phone/role', (req, res) => {
+    const { phone } = req.params;
+    const { role } = req.body;
+    const db = getDB();
+    if (db.users[phone]) {
+      db.users[phone].role = role;
       saveDB(db);
     }
     res.json({ success: true });

@@ -1,0 +1,110 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents an authenticated player or admin on StarBetPay",
+      "type": "object",
+      "properties": {
+        "phone": { "type": "string", "description": "Unique phone number acting as user identifier" },
+        "name": { "type": "string", "description": "Display name of the user" },
+        "role": { "type": "string", "enum": ["user", "admin"], "description": "User privilege level" },
+        "passwordHash": { "type": "string", "description": "Sha256 hash of the password" },
+        "parentPhone": { "type": "string", "description": "Optional phone number of the sponsoring user" },
+        "referralCode": { "type": "string", "description": "Unique referral code for sponsorship" },
+        "balanceCommission": { "type": "number", "description": "Accrued commission balance" },
+        "balanceCommissionWithdrawn": { "type": "number", "description": "Withdrawn commission amount" },
+        "mfaEnabled": { "type": "boolean", "description": "Whether two-factor authentication is configured" },
+        "createdAt": { "type": "string", "description": "ISO timestamp of registration" }
+      },
+      "required": ["phone", "name", "role", "passwordHash", "referralCode", "balanceCommission", "balanceCommissionWithdrawn", "mfaEnabled", "createdAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Represents a deposit, withdrawal, or commission payout request",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique transaction key" },
+        "type": { "type": "string", "enum": ["deposit", "withdrawal", "commission_payout"], "description": "Type of operation" },
+        "amount": { "type": "number", "description": "Total transfer cost in FCFA/locale currency" },
+        "userPhone": { "type": "string", "description": "Phone number of user initiating the transfer" },
+        "userName": { "type": "string", "description": "Display name of user initiating the transfer" },
+        "xbetAccount": { "type": "string", "description": "Associated 1xBet account ID/number" },
+        "paymentMethod": { "type": "string", "description": "Selected payment service" },
+        "paymentNumber": { "type": "string", "description": "Sender/receiver payment gateway number" },
+        "screenshot": { "type": "string", "description": "Base64 encoded screenshot attachment" },
+        "withdrawCode": { "type": "string", "description": "Optional 1xBet withdrawal approval code" },
+        "status": { "type": "string", "enum": ["pending", "validated", "rejected"], "description": "Current authorization state" },
+        "date": { "type": "string", "description": "ISO timestamp of transaction" },
+        "rejectionReason": { "type": "string", "description": "Details behind terminal rejection if appropriate" },
+        "appliedCommission": { "type": "boolean", "description": "If sponsor payout percent has been calculated" }
+      },
+      "required": ["id", "type", "amount", "userPhone", "userName", "xbetAccount", "paymentMethod", "paymentNumber", "status", "date"]
+    },
+    "PaymentMethod": {
+      "title": "PaymentMethod",
+      "description": "Configurable money transfer systems like MTNDepot, Wave, Orange",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Unique identifier of the electronic wallet channel" },
+        "number": { "type": "string", "description": "Receiving account number of the platform" },
+        "active": { "type": "boolean", "description": "Controls if clients can use this method" }
+      },
+      "required": ["name", "number", "active"]
+    },
+    "AppConfig": {
+      "title": "AppConfig",
+      "description": "Dynamic custom configurations and support contacts for StarBetPay",
+      "type": "object",
+      "properties": {
+        "popupEnabled": { "type": "boolean", "description": "Toggle to display announcement modals" },
+        "popupTitle": { "type": "string", "description": "Header text for the dashboard announcement" },
+        "popupMessage": { "type": "string", "description": "Announcement body message" },
+        "supportWhatsapp": { "type": "string", "description": "Support contact link on WhatsApp" },
+        "withdrawalPhysVille": { "type": "string", "description": "City address for physical in-person withdrawals" },
+        "withdrawalPhysRue": { "type": "string", "description": "Street address for physical in-person withdrawals" }
+      },
+      "required": ["popupEnabled", "popupTitle", "popupMessage", "supportWhatsapp", "withdrawalPhysVille", "withdrawalPhysRue"]
+    },
+    "SportCoupon": {
+      "title": "SportCoupon",
+      "description": "Curated betting match predictions and slip recommendations",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique coupon ID" },
+        "title": { "type": "string", "description": "Descriptive subtitle" },
+        "confidence": { "type": "string", "enum": ["ÉLEVÉ", "MOYEN", "RISQUE ÉLEVÉ"] },
+        "totalCote": { "type": "number", "description": "Combined odd coefficient" },
+        "status": { "type": "string", "enum": ["pending", "won", "lost"] },
+        "date": { "type": "string" },
+        "matches": { "type": "array", "description": "List of games included in the slip" }
+      },
+      "required": ["id", "title", "confidence", "totalCote", "status"]
+    }
+  },
+  "firestore": {
+    "users/{phone}": {
+      "schema": "User",
+      "description": "User accounts indexed by unique phone number identifier"
+    },
+    "transactions/{transactionId}": {
+      "schema": "Transaction",
+      "description": "Historical money transfers/claims requested by the users"
+    },
+    "paymentMethods/{methodName}": {
+      "schema": "PaymentMethod",
+      "description": "Enabled mobile money channels"
+    },
+    "config/app": {
+      "schema": "AppConfig",
+      "description": "Global administration setup"
+    },
+    "coupons/{couponId}": {
+      "schema": "SportCoupon",
+      "description": "Active matches predictions"
+    },
+    "pastCoupons/{pastCouponId}": {
+      "schema": "SportCoupon",
+      "description": "Settled or archived historical sports coupons"
+    }
+  }
+}

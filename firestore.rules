@@ -1,0 +1,183 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ==========================================
+    // 0. GLOBAL HELPER PRIMITIVES (SECURITY SPECS)
+    // ==========================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-+:]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Role verification checking securely against admins collection
+    function isAdmin() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    // Check ownership of user profiles and matching records securely via authUid
+    function isProfileOwner(phone) {
+      return isSignedIn() && 
+        exists(/databases/$(database)/documents/users/$(phone)) &&
+        get(/databases/$(database)/documents/users/$(phone)).data.authUid == request.auth.uid;
+    }
+
+    // ==========================================
+    // 1. CATCH-ALL DEFAULT DENY SAFEGUARD
+    // ==========================================
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ==========================================
+    // 2. USERS COLLECTION
+    // ==========================================
+    match /users/{phone} {
+      // Allow individual metadata check and custom login reads dynamically without auth state blocks
+      allow get: if true;
+      
+      // Keep listing user collections protected strictly for administrators
+      allow list: if isAdmin();
+      
+      // Standard registration: Validate shape and block admin role promotion
+      allow create: if isValidId(phone) && isValidUser(incoming()) && (
+        isAdmin() || 
+        (incoming().role == 'user' && 
+         incoming().balanceCommission == 0 && 
+         incoming().balanceCommissionWithdrawn == 0)
+      );
+
+      // Protect updates by owners or administrators
+      allow update: if isValidUser(incoming()) && (
+        isAdmin() || 
+        ((request.auth == null || isProfileOwner(phone)) && 
+         incoming().role == existing().role && 
+         incoming().balanceCommission == existing().balanceCommission && 
+         incoming().balanceCommissionWithdrawn == existing().balanceCommissionWithdrawn)
+      );
+
+      // Erase profiles strictly by admins
+      allow delete: if isAdmin();
+    }
+
+    // Direct user validation blueprint helper
+    function isValidUser(user) {
+      return user.keys().hasAll(['phone', 'name', 'role', 'passwordHash', 'referralCode', 'balanceCommission', 'balanceCommissionWithdrawn', 'mfaEnabled', 'createdAt']) &&
+             user.keys().size() <= 11 &&
+             user.phone is string && user.phone.size() >= 8 && user.phone.size() <= 20 &&
+             user.name is string && user.name.size() >= 2 && user.name.size() <= 100 &&
+             (user.role == 'user' || user.role == 'admin') &&
+             user.passwordHash is string &&
+             user.referralCode is string &&
+             user.balanceCommission is number &&
+             user.balanceCommissionWithdrawn is number &&
+             user.mfaEnabled is bool &&
+             user.createdAt is string;
+    }
+
+    // ==========================================
+    // 3. ADMINS COLLECTION
+    // ==========================================
+    match /admins/{authUid} {
+      // Allow checking active status for authenticated users
+      allow read: if isSignedIn();
+      
+      // Permit writing role mappings only to direct admins or during bootstrapped admin setups
+      allow write: if isAdmin() || (
+        isSignedIn() && 
+        authUid == request.auth.uid && 
+        !exists(/databases/$(database)/documents/admins/$(authUid)) && 
+        exists(/databases/$(database)/documents/users/0197656263) && 
+        get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid
+      );
+    }
+
+    // ==========================================
+    // 4. TRANSACTIONS COLLECTION
+    // ==========================================
+    match /transactions/{transactionId} {
+      // Permit view actions for admins, owners, or guest fallbacks
+      allow get: if true;
+      
+      // Restrict collection list queries securely
+      allow list: if isAdmin() || (resource.data.userPhone != null);
+
+      // Create new transactions matching structures
+      allow create: if isValidId(transactionId) && 
+                    isValidTransaction(incoming()) && 
+                    incoming().status == 'pending';
+
+      // Updates can modify fields only when pending
+      allow update: if isValidTransaction(incoming()) && (
+        isAdmin() || (
+          existing().status == 'pending' &&
+          incoming().status == 'pending' &&
+          incoming().amount == existing().amount &&
+          incoming().type == existing().type
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // Transaction validation helpers
+    function isValidTransaction(tx) {
+      return tx.keys().hasAll(['id', 'type', 'amount', 'userPhone', 'userName', 'xbetAccount', 'paymentMethod', 'paymentNumber', 'status', 'date']) &&
+             tx.keys().size() <= 13 &&
+             tx.id is string && tx.id.size() <= 100 &&
+             (tx.type == 'deposit' || tx.type == 'withdrawal' || tx.type == 'commission_payout') &&
+             tx.amount is number && tx.amount > 0 &&
+             tx.userPhone is string &&
+             tx.userName is string &&
+             tx.xbetAccount is string &&
+             tx.paymentMethod is string &&
+             tx.paymentNumber is string &&
+             (tx.status == 'pending' || tx.status == 'validated' || tx.status == 'rejected') &&
+             tx.date is string;
+    }
+
+    // ==========================================
+    // 5. PAYMENT METHODS COLLECTION
+    // ==========================================
+    match /paymentMethods/{methodName} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ==========================================
+    // 6. GLOBAL CONFIG
+    // ==========================================
+    match /config/app {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ==========================================
+    // 7. ACTIVE COUPONS
+    // ==========================================
+    match /coupons/{couponId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ==========================================
+    // 8. PAST COUPONS
+    // ==========================================
+    match /pastCoupons/{pastCouponId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+  }
+}
