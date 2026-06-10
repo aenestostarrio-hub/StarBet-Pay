@@ -32,7 +32,19 @@ const updateDoc = (ref: any, data: any) => {
   const cleaned = cleanUndefined(data);
   return originalUpdateDoc(ref, cleaned);
 };
-import firebaseConfig from '../../firebase-applet-config.json';
+import firebaseConfigFile from '../../firebase-applet-config.json';
+
+const metaEnv = (import.meta as any).env || {};
+
+const firebaseConfig = {
+  apiKey: metaEnv.VITE_FIREBASE_API_KEY || firebaseConfigFile.apiKey,
+  authDomain: metaEnv.VITE_FIREBASE_AUTH_DOMAIN || firebaseConfigFile.authDomain,
+  projectId: metaEnv.VITE_FIREBASE_PROJECT_ID || firebaseConfigFile.projectId,
+  storageBucket: metaEnv.VITE_FIREBASE_STORAGE_BUCKET || firebaseConfigFile.storageBucket,
+  messagingSenderId: metaEnv.VITE_FIREBASE_MESSAGING_SENDER_ID || firebaseConfigFile.messagingSenderId,
+  appId: metaEnv.VITE_FIREBASE_APP_ID || firebaseConfigFile.appId,
+  firestoreDatabaseId: metaEnv.VITE_FIREBASE_FIRESTORE_DATABASE_ID || firebaseConfigFile.firestoreDatabaseId || "(default)"
+};
 
 // Initialize Firebase App & SDKs
 const app = initializeApp(firebaseConfig);
