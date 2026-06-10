@@ -253,7 +253,78 @@ async function startServer() {
     });
   }, 15000);
 
+  // Serve supabase setup SQL for direct application setup helper
+  app.get('/api/setup-sql', (req, res) => {
+    try {
+      const sqlContent = fs.readFileSync(path.resolve(process.cwd(), 'supabase_setup.sql'), 'utf-8');
+      res.json({ sql: sqlContent });
+    } catch (e) {
+      res.status(500).json({ error: 'Impossible de lire le fichier SQL' });
+    }
+  });
+
   // Simple auth endpoints
+  app.post('/api/auth/sync', (req, res) => {
+    const { user, transactions } = req.body;
+    if (!user || !user.phone) {
+      return res.status(400).json({ error: 'Missing user context' });
+    }
+    const db = getDB();
+    const phone = user.phone;
+    let dbUpdated = false;
+
+    if (!db.users[phone]) {
+      db.users[phone] = {
+        phone: user.phone,
+        name: user.name || 'Utilisateur',
+        role: user.role || 'user',
+        passwordHash: user.passwordHash || 'Password123',
+        parentPhone: user.parentPhone,
+        referralCode: user.referralCode || user.phone,
+        balanceCommission: Number(user.balanceCommission) || 0,
+        balanceCommissionWithdrawn: Number(user.balanceCommissionWithdrawn) || 0,
+        mfaEnabled: user.mfaEnabled !== undefined ? user.mfaEnabled : true,
+        createdAt: user.createdAt || new Date().toISOString()
+      };
+      dbUpdated = true;
+    }
+
+    if (Array.isArray(transactions)) {
+      transactions.forEach((tx: any) => {
+        const exists = db.transactions.some((t) => t.id === tx.id);
+        if (!exists) {
+          db.transactions.push({
+            id: tx.id,
+            type: tx.type,
+            amount: Number(tx.amount),
+            userPhone: tx.userPhone,
+            userName: tx.userName || user.name || 'Utilisateur',
+            xbetAccount: tx.xbetAccount,
+            paymentMethod: tx.paymentMethod,
+            paymentNumber: tx.paymentNumber,
+            screenshot: tx.screenshot,
+            withdrawCode: tx.withdrawCode,
+            status: tx.status || 'pending',
+            date: tx.date || new Date().toLocaleString(),
+            rejectionReason: tx.rejectionReason,
+            appliedCommission: !!tx.appliedCommission
+          });
+          dbUpdated = true;
+        }
+      });
+      if (dbUpdated) {
+        db.transactions.sort((a, b) => b.id.localeCompare(a.id));
+      }
+    }
+
+    if (dbUpdated) {
+      saveDB(db);
+      console.log(`[Sync] Synced user ${phone} and ${transactions?.length || 0} transactions to server.`);
+    }
+
+    res.json({ success: true, user: db.users[phone] });
+  });
+
   app.post('/api/auth/register', (req, res) => {
     const { phone, name, password, parentPhone } = req.body;
     if (!phone || !name || !password) {

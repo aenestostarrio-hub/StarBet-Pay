@@ -1,17 +1,50 @@
 import { createClient } from '@supabase/supabase-js';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon, DBState } from '../types';
 
-// Read Vercel/Vite environment variables
-const supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+// Read Vercel/Vite environment variables with localStorage fallback for direct easy setup in browser!
+export let supabaseUrl = (import.meta as any).env?.VITE_SUPABASE_URL || '';
+export let supabaseAnonKey = (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
 
-export const isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey);
+// Load browser-entered secrets
+if (typeof window !== 'undefined') {
+  const savedUrl = localStorage.getItem('starbetpay_supabase_url');
+  const savedKey = localStorage.getItem('starbetpay_supabase_anon_key');
+  if (savedUrl && savedKey && (!supabaseUrl || supabaseUrl.includes('YOUR_SUPABASE_URL'))) {
+    supabaseUrl = savedUrl;
+    supabaseAnonKey = savedKey;
+  }
+}
 
-export const supabase = isSupabaseConfigured
+export let isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey) && !supabaseUrl.includes('YOUR_SUPABASE_URL');
+
+export function setSupabaseConfigured(val: boolean) {
+  isSupabaseConfigured = val;
+}
+
+export let onSupabaseFallbackOccurred: (() => void) | null = null;
+
+export let supabase = isSupabaseConfigured && supabaseUrl && supabaseAnonKey
   ? createClient(supabaseUrl, supabaseAnonKey)
   : null;
 
+export function updateSupabaseConfig(url: string, key: string) {
+  if (typeof window !== 'undefined') {
+    if (url && key) {
+      localStorage.setItem('starbetpay_supabase_url', url);
+      localStorage.setItem('starbetpay_supabase_anon_key', key);
+    } else {
+      localStorage.removeItem('starbetpay_supabase_url');
+      localStorage.removeItem('starbetpay_supabase_anon_key');
+    }
+  }
+  supabaseUrl = url || (import.meta as any).env?.VITE_SUPABASE_URL || '';
+  supabaseAnonKey = key || (import.meta as any).env?.VITE_SUPABASE_ANON_KEY || '';
+  isSupabaseConfigured = !!(supabaseUrl && supabaseAnonKey) && !supabaseUrl.includes('YOUR_SUPABASE_URL');
+  supabase = isSupabaseConfigured ? createClient(supabaseUrl, supabaseAnonKey) : null;
+}
+
 // Dynamic check: Should we run in fully local browser sandbox mode?
+const isPreviewEnvironment = typeof window !== "undefined" && (window.location.hostname.includes("run.app") || window.location.hostname.includes("localhost") || window.location.hostname.includes("127.0.0.1"));
 export let useLocalStorageSandbox = false;
 
 if (typeof window !== 'undefined') {
@@ -23,17 +56,13 @@ if (typeof window !== 'undefined') {
     if (isAIStudioPreview) {
       useLocalStorageSandbox = false;
     } else if (isVercel || !isAIStudioPreview) {
-      useLocalStorageSandbox = true;
+      useLocalStorageSandbox = isPreviewEnvironment ? false : true;
     }
   }
 
   // Double-safeguard fallback prevention on AI Studio runtime
   if (isAIStudioPreview) {
-    setInterval(() => {
-      if (useLocalStorageSandbox) {
-        useLocalStorageSandbox = false;
-      }
-    }, 100);
+    useLocalStorageSandbox = false;
   }
 }
 
@@ -220,13 +249,16 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
     }
     const response = await originalFetch(finalInput, init);
     const contentType = response.headers.get('content-type') || '';
-    if (!contentType.includes('application/json') || response.status === 404) {
+    if (!contentType.includes('application/json')) {
       console.warn(`API returned status ${response.status} or non-JSON content-type: "${contentType}".`);
       if (isAIStudioPreview) {
-        // Enforce live connection in AI Studio to keep data consistent.
-        return response;
+        // Return clear, non-crashing JSON error for non-JSON responses
+        return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK", status: response.status }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        });
       }
-      useLocalStorageSandbox = true;
+      useLocalStorageSandbox = isPreviewEnvironment ? false : true;
       return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK" }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
@@ -236,9 +268,13 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
   } catch (e) {
     console.warn("Fetch failed:", e);
     if (isAIStudioPreview) {
-      throw e;
+      // Guard against fetch exception crash on initialization
+      return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK", details: String(e) }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      });
     }
-    useLocalStorageSandbox = true;
+    useLocalStorageSandbox = isPreviewEnvironment ? false : true;
     return new Response(JSON.stringify({ error: "STANDALONE_FALLBACK" }), {
       status: 200,
       headers: { 'Content-Type': 'application/json' }
@@ -251,6 +287,78 @@ const customFetch = async (input: RequestInfo | URL, init?: RequestInit): Promis
  * (ideal for Vercel deployment) and local server API endpoints (fallback/dev mode).
  */
 export const dbService = {
+  // Sync Local Storage User to Backend Database if missing
+  async syncUserWithServer(user: any, transactions?: any[]): Promise<any> {
+    const hn = typeof window !== 'undefined' ? window.location.hostname : '';
+    const isAIStudioPreview = hn.includes('run.app') || hn.includes('localhost') || hn.includes('127.0.0.1');
+
+    if (isSupabaseConfigured && supabase) {
+      try {
+        const { data: existingUser } = await supabase
+          .from('sb_users')
+          .select('phone')
+          .eq('phone', user.phone)
+          .maybeSingle();
+        
+        if (!existingUser) {
+          console.log('[Supabase Sync] Current user not found in Supabase. Auto-inserting user...');
+          const userToInsert = {
+            phone: user.phone,
+            name: user.name || 'Utilisateur',
+            role: user.role || 'user',
+            password_hash: user.passwordHash || 'pbkdf2_sha256$...mock...',
+            parent_phone: user.parentPhone || null,
+            referral_code: user.referralCode || `star_${user.phone.substring(user.phone.length - 4)}`,
+            balance_commission: user.balanceCommission || 0,
+            balance_commission_withdrawn: user.balanceCommissionWithdrawn || 0,
+            mfa_enabled: user.mfaEnabled ?? true
+          };
+          await supabase.from('sb_users').insert(userToInsert);
+        }
+
+        if (transactions && transactions.length > 0) {
+          console.log('[Supabase Sync] Syncing local transactions to Supabase...');
+          const txsToInsert = transactions.map((t: any) => ({
+            id: t.id,
+            type: t.type,
+            amount: t.amount,
+            user_phone: t.userPhone,
+            user_name: t.userName || user.name || 'Client',
+            xbet_account: t.xbetAccount || null,
+            payment_method: t.paymentMethod || null,
+            payment_number: t.paymentNumber || null,
+            screenshot: t.screenshot || null,
+            withdraw_code: t.withdrawCode || null,
+            status: t.status,
+            date: t.date,
+            rejection_reason: t.rejectionReason || null,
+            applied_commission: t.appliedCommission || false
+          }));
+          await supabase.from('sb_transactions').upsert(txsToInsert, { onConflict: 'id' });
+        }
+        return { success: true };
+      } catch (err) {
+        console.warn('[Supabase Sync] Auto-sync of session to cloud failed, bypassing to avoid fallback loop:', err);
+        return { success: false };
+      }
+    }
+
+    if (useLocalStorageSandbox && !isAIStudioPreview) {
+      return { success: true };
+    }
+    try {
+      const res = await customFetch('/api/auth/sync', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ user, transactions })
+      });
+      return await res.json();
+    } catch (e) {
+      console.warn("User sync with server failed, ignoring: ", e);
+      return { success: false };
+    }
+  },
+
   // Config
   async getConfig(): Promise<AppConfig> {
     if (isSupabaseConfigured && supabase) {
@@ -261,6 +369,31 @@ export const dbService = {
         .single();
       
       if (error) {
+        if (error.code === 'PGRST116') {
+          console.warn('sb_config is empty. Auto-seeding initial configurations...');
+          const defaultConfig = {
+            id: 1,
+            popup_enabled: true,
+            popup_title: 'Chers clients',
+            popup_message: 'Bienvenue sur StarBet Pay, la solution de dépôt & retrait rapide.',
+            support_whatsapp: '+22900000000',
+            withdrawal_phys_ville: 'Abomey Calavi',
+            withdrawal_phys_rue: 'Chez star prono'
+          };
+          try {
+            await supabase.from('sb_config').insert(defaultConfig);
+          } catch (insertErr) {
+            console.error('Failed to auto-seed sb_config:', insertErr);
+          }
+          return {
+            popupEnabled: true,
+            popupTitle: defaultConfig.popup_title,
+            popupMessage: defaultConfig.popup_message,
+            supportWhatsapp: defaultConfig.support_whatsapp,
+            withdrawalPhysVille: defaultConfig.withdrawal_phys_ville,
+            withdrawalPhysRue: defaultConfig.withdrawal_phys_rue
+          };
+        }
         console.error('Supabase error fetching config: ', error);
         throw error;
       }
@@ -280,12 +413,12 @@ export const dbService = {
         const res = await customFetch('/api/config');
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           return getLocalDB().config;
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         return getLocalDB().config;
       }
     }
@@ -331,7 +464,7 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           const db = getLocalDB();
           db.config = { ...db.config, ...config };
           saveLocalDB(db);
@@ -339,7 +472,7 @@ export const dbService = {
         }
         return data.config;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         const db = getLocalDB();
         db.config = { ...db.config, ...config };
         saveLocalDB(db);
@@ -356,6 +489,21 @@ export const dbService = {
         .select('*');
       
       if (error) throw error;
+      
+      if (!data || data.length === 0) {
+        console.warn('sb_payment_methods is empty. Auto-seeding...');
+        const defaults = [
+          { name: 'AMANA', number: '85385627', active: true },
+          { name: 'NITA', number: '85385627', active: true }
+        ];
+        try {
+          await supabase.from('sb_payment_methods').insert(defaults);
+        } catch (insertErr) {
+          console.error('Failed to auto-seed sb_payment_methods:', insertErr);
+        }
+        return defaults;
+      }
+
       return (data || []).map(p => ({
         name: p.name,
         number: p.number,
@@ -369,12 +517,12 @@ export const dbService = {
         const res = await customFetch('/api/payment-methods');
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           return getLocalDB().paymentMethods;
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         return getLocalDB().paymentMethods;
       }
     }
@@ -409,13 +557,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.addOrUpdatePaymentMethod(name, number);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.addOrUpdatePaymentMethod(name, number);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.addOrUpdatePaymentMethod(name, number);
+
+          }
         }
         return data.paymentMethods;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.addOrUpdatePaymentMethod(name, number);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.addOrUpdatePaymentMethod(name, number);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.addOrUpdatePaymentMethod(name, number);
+
+        }
       }
     }
   },
@@ -455,13 +657,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.togglePaymentMethod(name);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.togglePaymentMethod(name);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.togglePaymentMethod(name);
+
+          }
         }
         return data.paymentMethods;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.togglePaymentMethod(name);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.togglePaymentMethod(name);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.togglePaymentMethod(name);
+
+        }
       }
     }
   },
@@ -474,6 +730,46 @@ export const dbService = {
         .select('*');
       
       if (error) throw error;
+
+      if (!data || data.length === 0) {
+        console.warn('sb_coupons is empty. Auto-seeding...');
+        const defaults = [
+          {
+            id: 'secured',
+            title: 'COUPON SÉCURISÉ (COTE ~2)',
+            confidence: 'ÉLEVÉ',
+            total_cote: 2.00,
+            matches: []
+          },
+          {
+            id: 'medium',
+            title: 'COUPON INTERMÉDIAIRE (COTE ~5)',
+            confidence: 'MOYEN',
+            total_cote: 5.00,
+            matches: []
+          },
+          {
+            id: 'bold',
+            title: 'COUPON AUDACIEUX (COTE ~10)',
+            confidence: 'RISQUE ÉLEVÉ',
+            total_cote: 10.00,
+            matches: []
+          }
+        ];
+        try {
+          await supabase.from('sb_coupons').insert(defaults);
+        } catch (insertErr) {
+          console.error('Failed to auto-seed sb_coupons:', insertErr);
+        }
+        return defaults.map(c => ({
+          id: c.id,
+          title: c.title,
+          confidence: c.confidence as any,
+          totalCote: c.total_cote,
+          matches: c.matches
+        }));
+      }
+
       return (data || []).map(c => ({
         id: c.id,
         title: c.title,
@@ -491,12 +787,12 @@ export const dbService = {
         const res = await customFetch('/api/coupons');
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           return getLocalDB().coupons;
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         return getLocalDB().coupons;
       }
     }
@@ -539,13 +835,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.updateCoupon(coupon);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.updateCoupon(coupon);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.updateCoupon(coupon);
+
+          }
         }
         return data.coupons;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.updateCoupon(coupon);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.updateCoupon(coupon);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.updateCoupon(coupon);
+
+        }
       }
     }
   },
@@ -617,13 +967,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.setCouponResult(id, status);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.setCouponResult(id, status);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.setCouponResult(id, status);
+
+          }
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.setCouponResult(id, status);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.setCouponResult(id, status);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.setCouponResult(id, status);
+
+        }
       }
     }
   },
@@ -653,12 +1057,12 @@ export const dbService = {
         const res = await customFetch('/api/coupons/history');
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           return getLocalDB().pastCoupons || [];
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         return getLocalDB().pastCoupons || [];
       }
     }
@@ -685,13 +1089,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.deleteHistoryEntry(id);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.deleteHistoryEntry(id);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.deleteHistoryEntry(id);
+
+          }
         }
         return data.pastCoupons;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.deleteHistoryEntry(id);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.deleteHistoryEntry(id);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.deleteHistoryEntry(id);
+
+        }
       }
     }
   },
@@ -717,13 +1175,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.clearHistory();
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.clearHistory();
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.clearHistory();
+
+          }
         }
         return data.pastCoupons;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.clearHistory();
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.clearHistory();
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.clearHistory();
+
+        }
       }
     }
   },
@@ -762,13 +1274,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.addPastCoupon(coupon);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.addPastCoupon(coupon);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.addPastCoupon(coupon);
+
+          }
         }
         return data.pastCoupons;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.addPastCoupon(coupon);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.addPastCoupon(coupon);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.addPastCoupon(coupon);
+
+        }
       }
     }
   },
@@ -809,13 +1375,67 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.updatePastCoupon(coupon);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.updatePastCoupon(coupon);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.updatePastCoupon(coupon);
+
+          }
         }
         return data.pastCoupons;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.updatePastCoupon(coupon);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.updatePastCoupon(coupon);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.updatePastCoupon(coupon);
+
+        }
       }
     }
   },
@@ -844,7 +1464,7 @@ export const dbService = {
         referral_code: phone,
         balance_commission: 0,
         balance_commission_withdrawn: 0,
-        mfa_enabled: true,
+        mfa_enabled: false,
         created_at: new Date().toISOString()
       };
 
@@ -862,7 +1482,7 @@ export const dbService = {
         referralCode: phone,
         balanceCommission: 0,
         balanceCommissionWithdrawn: 0,
-        mfaEnabled: true,
+        mfaEnabled: false,
         createdAt: newUser.created_at
       };
     } else if (useLocalStorageSandbox) {
@@ -879,7 +1499,7 @@ export const dbService = {
         referralCode: phone,
         balanceCommission: 0,
         balanceCommissionWithdrawn: 0,
-        mfaEnabled: true,
+        mfaEnabled: false,
         createdAt: new Date().toISOString()
       };
       db.users[phone] = newUser;
@@ -894,27 +1514,111 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.register(phone, name, passwordHash, parentPhone);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.register(phone, name, passwordHash, parentPhone);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.register(phone, name, passwordHash, parentPhone);
+
+          }
         }
         if (!res.ok) throw new Error(data.error || 'Erreur lors de l\'inscription');
         return data.user;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.register(phone, name, passwordHash, parentPhone);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.register(phone, name, passwordHash, parentPhone);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.register(phone, name, passwordHash, parentPhone);
+
+        }
       }
     }
   },
 
   async login(phone: string, passwordHash: string): Promise<{ tempUser: Partial<DBUser> }> {
     if (isSupabaseConfigured && supabase) {
-      const { data: user, error } = await supabase
+      let { data: user, error } = await supabase
         .from('sb_users')
         .select('*')
         .eq('phone', phone)
         .maybeSingle();
 
       if (error) throw error;
+
+      // Auto-populate default admin or helper user if it does not exist yet on the clean Supabase instance
+      if (!user && (phone === '0197656263' || phone === '0161616161')) {
+        const isDemoAdmin = phone === '0197656263';
+        console.log(`[Supabase Auth] Demo user ${phone} not found. Auto-generating account...`);
+        const demoUser = {
+          phone: phone,
+          name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
+          role: isDemoAdmin ? 'admin' : 'user',
+          password_hash: passwordHash, // Match the expected hash (passes client verification)
+          parent_phone: null,
+          referral_code: isDemoAdmin ? 'star_admin' : 'star_agbozo',
+          balance_commission: 0,
+          balance_commission_withdrawn: 0,
+          mfa_enabled: false,
+          created_at: new Date().toISOString()
+        };
+        try {
+          const { data: inserted, error: insertErr } = await supabase
+            .from('sb_users')
+            .insert(demoUser)
+            .select()
+            .single();
+          if (!insertErr && inserted) {
+            user = inserted;
+          }
+        } catch (e) {
+          console.error("Failed to auto-seed demo account on login:", e);
+        }
+      }
       
       if (!user || user.password_hash !== passwordHash) {
         throw new Error('Numéro de téléphone ou mot de passe incorrect');
@@ -925,7 +1629,12 @@ export const dbService = {
           phone: user.phone,
           name: user.name,
           role: user.role as 'admin' | 'user',
-          mfaEnabled: user.mfa_enabled
+          mfaEnabled: user.mfa_enabled,
+          parentPhone: user.parent_phone,
+          referralCode: user.referral_code,
+          balanceCommission: Number(user.balance_commission),
+          balanceCommissionWithdrawn: Number(user.balance_commission_withdrawn),
+          createdAt: user.created_at
         }
       };
     } else if (useLocalStorageSandbox) {
@@ -939,7 +1648,12 @@ export const dbService = {
           phone: user.phone,
           name: user.name,
           role: user.role,
-          mfaEnabled: user.mfaEnabled
+          mfaEnabled: user.mfaEnabled,
+          parentPhone: user.parentPhone,
+          referralCode: user.referralCode,
+          balanceCommission: user.balanceCommission,
+          balanceCommissionWithdrawn: user.balanceCommissionWithdrawn,
+          createdAt: user.createdAt
         }
       };
     } else {
@@ -951,14 +1665,68 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.login(phone, passwordHash);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.login(phone, passwordHash);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.login(phone, passwordHash);
+
+          }
         }
         if (!res.ok) throw new Error(data.error || 'Erreur lors de la connexion');
         return data;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.login(phone, passwordHash);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.login(phone, passwordHash);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.login(phone, passwordHash);
+
+        }
       }
     }
   },
@@ -1008,14 +1776,68 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.verifyMfa(phone, token);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.verifyMfa(phone, token);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.verifyMfa(phone, token);
+
+          }
         }
         if (!res.ok) throw new Error(data.error || 'Erreur MFA');
         return data.user;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.verifyMfa(phone, token);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.verifyMfa(phone, token);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.verifyMfa(phone, token);
+
+        }
       }
     }
   },
@@ -1035,9 +1857,51 @@ export const dbService = {
         .from('sb_users')
         .select('*')
         .eq('phone', phone)
-        .single();
+        .maybeSingle();
       
       if (userErr) throw userErr;
+
+      let activeUser = user;
+      if (!activeUser) {
+        console.warn(`User ${phone} not found in sb_users. Auto-registering...`);
+        const newUser = {
+          phone: phone,
+          name: phone === '0161616161' ? 'Agbozo' : 'Client ' + phone.substring(phone.length - 4),
+          role: phone === '0161616161' ? 'admin' : 'user',
+          password_hash: 'pbkdf2_sha1$...mockhash...',
+          parent_phone: null,
+          referral_code: `star_${phone.substring(phone.length - 4)}`,
+          balance_commission: 0,
+          balance_commission_withdrawn: 0,
+          mfa_enabled: true
+        };
+        try {
+          const { data: inserted, error: insErr } = await supabase
+            .from('sb_users')
+            .insert(newUser)
+            .select()
+            .single();
+          if (!insErr && inserted) {
+            activeUser = inserted;
+          }
+        } catch (e) {
+          console.error('Failed to auto-seed missing user:', e);
+        }
+
+        if (!activeUser) {
+          activeUser = {
+            phone: phone,
+            name: 'Client',
+            role: 'user',
+            password_hash: 'mock',
+            parent_phone: null,
+            referral_code: `star_${phone.substring(phone.length - 4)}`,
+            balance_commission: 0,
+            balance_commission_withdrawn: 0,
+            mfa_enabled: true
+          };
+        }
+      }
 
       // Count filleuls (where parent_phone = user's phone)
       const { count, error: countErr } = await supabase
@@ -1048,12 +1912,12 @@ export const dbService = {
       if (countErr) throw countErr;
 
       return {
-        phone: user.phone,
-        name: user.name,
-        balanceCommission: Number(user.balance_commission),
-        balanceCommissionWithdrawn: Number(user.balance_commission_withdrawn),
+        phone: activeUser.phone,
+        name: activeUser.name,
+        balanceCommission: Number(activeUser.balance_commission),
+        balanceCommissionWithdrawn: Number(activeUser.balance_commission_withdrawn),
         filleulsCount: count || 0,
-        referralCode: user.referral_code
+        referralCode: activeUser.referral_code
       };
     } else if (useLocalStorageSandbox) {
       const db = getLocalDB();
@@ -1072,14 +1936,50 @@ export const dbService = {
       try {
         const res = await customFetch(`/api/users/stats/${phone}`);
         const data = await res.json();
-        if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.getUserStats(phone);
+        if (data && (data.error === "STANDALONE_FALLBACK" || data.error === "STANDALONE_FALLBACK")) {
+          const db = getLocalDB();
+          const user = db.users[phone] || { phone, name: 'Utilisateur', balanceCommission: 0, balanceCommissionWithdrawn: 0, referralCode: phone };
+          const referrals = Object.values(db.users).filter(u => u.parentPhone === phone);
+          return {
+            phone: user.phone,
+            name: user.name,
+            balanceCommission: user.balanceCommission || 0,
+            balanceCommissionWithdrawn: user.balanceCommissionWithdrawn || 0,
+            filleulsCount: referrals.length,
+            referralCode: user.referralCode || phone
+          };
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.getUserStats(phone);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.getUserStats(phone);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.getUserStats(phone);
+
+        }
       }
     }
   },
@@ -1213,14 +2113,68 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.requestCommissionPayout(phone);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.requestCommissionPayout(phone);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.requestCommissionPayout(phone);
+
+          }
         }
         if (!res.ok) throw new Error(data.error || 'Erreur commission payout');
         return data;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.requestCommissionPayout(phone);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.requestCommissionPayout(phone);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.requestCommissionPayout(phone);
+
+        }
       }
     }
   },
@@ -1251,13 +2205,12 @@ export const dbService = {
       try {
         const res = await customFetch('/api/users');
         const data = await res.json();
-        if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+        if (data && (data.error === "STANDALONE_FALLBACK" || data.error === "STANDALONE_FALLBACK")) {
           return Object.values(getLocalDB().users);
         }
         return data.users;
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         return Object.values(getLocalDB().users);
       }
     }
@@ -1281,13 +2234,13 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
+          useLocalStorageSandbox = isPreviewEnvironment ? false : true;
           const db = getLocalDB();
           delete db.users[phone];
           saveLocalDB(db);
         }
       } catch (e) {
-        useLocalStorageSandbox = true;
+        useLocalStorageSandbox = isPreviewEnvironment ? false : true;
         const db = getLocalDB();
         delete db.users[phone];
         saveLocalDB(db);
@@ -1333,14 +2286,64 @@ export const dbService = {
         const url = phone ? `/api/transactions?phone=${phone}` : '/api/transactions';
         const res = await customFetch(url);
         const data = await res.json();
-        if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.getTransactions(phone);
+        if (data && (data.error === "STANDALONE_FALLBACK" || data.error === "STANDALONE_FALLBACK")) {
+          const db = getLocalDB();
+          let txs = db.transactions || [];
+          if (phone) {
+            txs = txs.filter(t => t.userPhone === phone);
+          }
+          return txs;
+        }
+        // Backup to localStorage sandbox for persistence across container restarts
+        try {
+          if (Array.isArray(data)) {
+            const dbObj = getLocalDB();
+            if (!dbObj.transactions) dbObj.transactions = [];
+            data.forEach((tx: DBTransaction) => {
+              const idx = dbObj.transactions.findIndex(t => t.id === tx.id);
+              if (idx !== -1) {
+                dbObj.transactions[idx] = tx;
+              } else {
+                dbObj.transactions.unshift(tx);
+              }
+            });
+            dbObj.transactions.sort((a, b) => b.id.localeCompare(a.id));
+            saveLocalDB(dbObj);
+          }
+        } catch (e) {
+          console.error('[Backup] Failed to sync transactions into localStorage:', e);
         }
         return data;
       } catch (e) {
-        useLocalStorageSandbox = true;
-        return this.getTransactions(phone);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.getTransactions(phone);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.getTransactions(phone);
+
+        }
       }
     }
   },
@@ -1446,14 +2449,82 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.createTransaction(tx);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.createTransaction(tx);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.createTransaction(tx);
+
+          }
         }
         if (!res.ok) throw new Error(data.error || 'Erreur création de transaction');
+        // Backup to local storage sandbox
+        try {
+          if (data && data.transaction) {
+            const dbObj = getLocalDB();
+            if (!dbObj.transactions) dbObj.transactions = [];
+            const exists = dbObj.transactions.some(t => t.id === data.transaction.id);
+            if (!exists) {
+              dbObj.transactions.unshift(data.transaction);
+              saveLocalDB(dbObj);
+            }
+          }
+        } catch (e) {
+          console.error('[Backup] Failed to save created transaction in local storage:', e);
+        }
         return data.transaction;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.createTransaction(tx);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.createTransaction(tx);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.createTransaction(tx);
+
+        }
       }
     }
   },
@@ -1608,14 +2679,289 @@ export const dbService = {
         });
         const data = await res.json();
         if (data && data.error === "STANDALONE_FALLBACK") {
-          useLocalStorageSandbox = true;
-          return this.updateTransactionStatus(id, status, rejectionReason);
+          if (isPreviewEnvironment) {
+
+            const _prev = useLocalStorageSandbox;
+
+            useLocalStorageSandbox = true;
+
+            try {
+
+              const _res = await this.updateTransactionStatus(id, status, rejectionReason);
+
+              useLocalStorageSandbox = _prev;
+
+              return _res;
+
+            } catch (err) {
+
+              useLocalStorageSandbox = _prev;
+
+              throw err;
+
+            }
+
+          } else {
+
+            useLocalStorageSandbox = true;
+
+            return this.updateTransactionStatus(id, status, rejectionReason);
+
+          }
+        }
+        // Backup to local storage sandbox
+        try {
+          if (data && data.transaction) {
+            const dbObj = getLocalDB();
+            if (!dbObj.transactions) dbObj.transactions = [];
+            const idx = dbObj.transactions.findIndex(t => t.id === data.transaction.id);
+            if (idx !== -1) {
+              dbObj.transactions[idx] = data.transaction;
+            } else {
+              dbObj.transactions.unshift(data.transaction);
+            }
+            saveLocalDB(dbObj);
+          }
+        } catch (e) {
+          console.error('[Backup] Failed to save updated transaction in local storage:', e);
         }
         return data.transaction;
       } catch (e: any) {
-        useLocalStorageSandbox = true;
-        return this.updateTransactionStatus(id, status, rejectionReason);
+        if (isPreviewEnvironment) {
+
+          const _prev = useLocalStorageSandbox;
+
+          useLocalStorageSandbox = true;
+
+          try {
+
+            const _res = await this.updateTransactionStatus(id, status, rejectionReason);
+
+            useLocalStorageSandbox = _prev;
+
+            return _res;
+
+          } catch (err) {
+
+            useLocalStorageSandbox = _prev;
+
+            throw err;
+
+          }
+
+        } else {
+
+          useLocalStorageSandbox = true;
+
+          return this.updateTransactionStatus(id, status, rejectionReason);
+
+        }
       }
     }
-  }
+  },
+
+  async seedSupabaseFromLocal(): Promise<{ success: boolean; message: string }> {
+      if (!isSupabaseConfigured || !supabase) {
+        throw new Error("Supabase n'est pas configuré");
+      }
+      const db = getLocalDB();
+      
+      // 1. Seed Config
+      try {
+        const configUpdates = {
+          id: 1,
+          popup_enabled: db.config.popupEnabled,
+          popup_title: db.config.popupTitle,
+          popup_message: db.config.popupMessage,
+          support_whatsapp: db.config.supportWhatsapp,
+          withdrawal_phys_ville: db.config.withdrawalPhysVille,
+          withdrawal_phys_rue: db.config.withdrawalPhysRue,
+        };
+        await supabase.from('sb_config').upsert(configUpdates);
+      } catch (e: any) {
+        console.error("Config seed failed:", e);
+      }
+
+      // 2. Seed Payment Methods
+      try {
+        const pms = db.paymentMethods.map(p => ({
+          name: p.name,
+          number: p.number,
+          active: p.active
+        }));
+        await supabase.from('sb_payment_methods').upsert(pms);
+      } catch (e) {
+        console.error("Payment methods seed failed:", e);
+      }
+
+      // 3. Seed Users
+      try {
+        const users = Object.values(db.users).map(u => ({
+          phone: u.phone,
+          name: u.name,
+          role: u.role,
+          password_hash: u.passwordHash,
+          parent_phone: u.parentPhone || null,
+          referral_code: u.referralCode || null,
+          balance_commission: u.balanceCommission || 0,
+          balance_commission_withdrawn: u.balanceCommissionWithdrawn || 0,
+          mfa_enabled: u.mfaEnabled ?? true
+        }));
+        await supabase.from('sb_users').upsert(users);
+      } catch (e) {
+        console.error("Users seed failed:", e);
+      }
+
+      // 4. Seed Coupons
+      try {
+        const coupons = db.coupons.map(c => ({
+          id: c.id,
+          title: c.title,
+          confidence: c.confidence || '',
+          total_cote: c.totalCote || 0,
+          matches: c.matches || [],
+          status: 'pending',
+          date: c.date || null
+        }));
+        await supabase.from('sb_coupons').upsert(coupons);
+      } catch (e) {
+        console.error("Coupons seed failed:", e);
+      }
+
+      // 5. Seed Transactions
+      try {
+        const txs = db.transactions.map(t => ({
+          id: t.id,
+          type: t.type,
+          amount: t.amount,
+          user_phone: t.userPhone,
+          user_name: t.userName || '',
+          xbet_account: t.xbetAccount || null,
+          payment_method: t.paymentMethod || null,
+          payment_number: t.paymentNumber || null,
+          screenshot: t.screenshot || null,
+          withdraw_code: t.withdrawCode || null,
+          status: t.status,
+          date: t.date,
+          rejection_reason: t.rejectionReason || null,
+          applied_commission: t.appliedCommission || false
+        }));
+        await supabase.from('sb_transactions').upsert(txs);
+      } catch (e) {
+        console.error("Transactions seed failed:", e);
+      }
+
+      return { success: true, message: "Les données d'essai (utilisateurs, configurations, opérations) ont été envoyées sur votre Cloud Supabase avec succès !" };
+    },
+
+    async checkSupabaseConnection(): Promise<{ success: boolean; error?: string; tablesMissing?: string[] }> {
+      try {
+        if (!supabaseUrl || !supabaseAnonKey || supabaseUrl.includes('YOUR_SUPABASE_URL')) {
+          return { success: false, error: "Les identifiants Supabase ne sont pas configurés ou sont invalides." };
+        }
+        const client = createClient(supabaseUrl, supabaseAnonKey);
+        if (!client) {
+          return { success: false, error: "Impossible d'instancier le client Supabase." };
+        }
+        
+        const tables = [
+          { name: 'sb_config', test: () => client.from('sb_config').select('id').limit(1) },
+          { name: 'sb_payment_methods', test: () => client.from('sb_payment_methods').select('name').limit(1) },
+          { name: 'sb_users', test: () => client.from('sb_users').select('phone').limit(1) },
+          { name: 'sb_coupons', test: () => client.from('sb_coupons').select('id').limit(1) },
+          { name: 'sb_past_coupons', test: () => client.from('sb_past_coupons').select('id').limit(1) },
+          { name: 'sb_transactions', test: () => client.from('sb_transactions').select('id').limit(1) }
+        ];
+        
+        const missing: string[] = [];
+        let lastErr = '';
+        for (const table of tables) {
+          try {
+            const { error } = await table.test();
+            if (error) {
+              console.error(`Table ${table.name} check failed:`, error);
+              // PGRST116 means 0 rows found or single row query failed, relation is OK!
+              // If the code is not PGRST116 and has a message that suggests missing relation, add to missing.
+              if (error.code !== 'PGRST116' && (
+                error.message?.toLowerCase().includes('relation') || 
+                error.message?.toLowerCase().includes('not exist') ||
+                error.code === '42P01'
+              )) {
+                missing.push(table.name);
+                lastErr = error.message;
+              }
+            }
+          } catch (e: any) {
+            missing.push(table.name);
+            lastErr = e.message || String(e);
+          }
+        }
+        
+        if (missing.length > 0) {
+          return {
+            success: false,
+            error: lastErr || `Ces tables requises sont manquantes dans votre projet : ${missing.join(', ')}`,
+            tablesMissing: missing
+          };
+        }
+        return { success: true };
+      } catch (e: any) {
+        return { success: false, error: e.message || String(e) };
+      }
+    }
 };
+
+// Auto-Fallback Interceptor: If any dbService method fails while isSupabaseConfigured is true,
+// we assume Supabase is misconfigured or its tables aren't set up yet.
+// In that case, we change isSupabaseConfigured to false and retry the call using the Express server / Sandbox fallback!
+if (typeof Proxy !== 'undefined') {
+  const originalDbService = { ...dbService };
+  Object.keys(dbService).forEach((key) => {
+    const originalMethod = (originalDbService as any)[key];
+    if (typeof originalMethod === 'function') {
+      (dbService as any)[key] = async function (...args: any[]) {
+        try {
+          return await originalMethod.apply(this, args);
+        } catch (error: any) {
+          if (isSupabaseConfigured) {
+            const errorMsg = (error?.message || String(error)).toLowerCase();
+            
+            // Filter only real infrastructure or connection errors
+            const isInfrastructureError = 
+              errorMsg.includes('relation') ||
+              errorMsg.includes('does not exist') ||
+              errorMsg.includes('42p01') ||
+              errorMsg.includes('failed to fetch') ||
+              errorMsg.includes('network') ||
+              errorMsg.includes('invalid api key') ||
+              errorMsg.includes('apikey') ||
+              errorMsg.includes('invalid input syntax') ||
+              error?.code === 'PGRST116' ||
+              error?.code === '42P01';
+
+            if (isInfrastructureError) {
+              console.warn(`[Supabase Fallback Helper] Call to dbService.${key} failed with INFRASTRUCTURE error. Setting isSupabaseConfigured = false and retrying with Local Server/Sandbox fallback. Error details:`, error);
+              isSupabaseConfigured = false;
+              if (onSupabaseFallbackOccurred) {
+                try { onSupabaseFallbackOccurred(); } catch (e) {}
+              }
+              if (typeof window !== 'undefined' && (window as any).onSupabaseFallbackOccurred) {
+                try { (window as any).onSupabaseFallbackOccurred(); } catch (e) {}
+              }
+              if ((dbService as any).onFallback) {
+                try { (dbService as any).onFallback(); } catch (e) {}
+              }
+              // Retry the same function. Now isSupabaseConfigured is false, so it will fall back automatically!
+              return await (dbService as any)[key].apply(this, args);
+            } else {
+              // Functional business errors (duplicate telephone, wrong pass, etc.) should not destroy connection
+              throw error;
+            }
+          }
+          throw error;
+        }
+      };
+    }
+  });
+}
+

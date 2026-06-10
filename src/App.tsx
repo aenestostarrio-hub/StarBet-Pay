@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
-import { dbService, isSupabaseConfigured, useLocalStorageSandbox } from './lib/supabase';
+import { dbService, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey } from './lib/supabase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
 
@@ -112,7 +112,77 @@ export default function App() {
   });
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
+  const [supabaseSetupNeeded, setSupabaseSetupNeeded] = useState(false);
+  const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
+  const [showDemoHelper, setShowDemoHelper] = useState(false);
+
+  const handleSyncCloudData = async () => {
+    setIsSyncingCloud(true);
+    try {
+      if ((dbService as any).seedSupabaseFromLocal) {
+        const result = await (dbService as any).seedSupabaseFromLocal();
+        showToast(result.message, 'success');
+        // Refresh everything
+        await fetchAdminTransactions();
+        await fetchAppConfigAndData();
+      } else {
+        showToast("Le service de synchronisation n'est pas disponible.", 'error');
+      }
+    } catch (err: any) {
+      console.error(err);
+      showToast(err.message || "Échec de la synchronisation vers Supabase", 'error');
+    } finally {
+      setIsSyncingCloud(false);
+    }
+  };
+
+  const [isCheckingCloud, setIsCheckingCloud] = useState(false);
+  const [cloudErrorDetails, setCloudErrorDetails] = useState<string | null>(null);
+  const [credUrl, setCredUrl] = useState(supabaseUrl || '');
+  const [credAnonKey, setCredAnonKey] = useState(supabaseAnonKey || '');
+
+  const handleCheckAndForceCloud = async (urlInput?: any, keyInput?: any) => {
+    setIsCheckingCloud(true);
+    setCloudErrorDetails(null);
+    try {
+      const urlToUse = (typeof urlInput === 'string') ? urlInput : credUrl;
+      const keyToUse = (typeof keyInput === 'string') ? keyInput : credAnonKey;
+
+      // Update configurations
+      updateSupabaseConfig((urlToUse || '').trim(), (keyToUse || '').trim());
+
+      if (!(dbService as any).checkSupabaseConnection) {
+        showToast("Service de diagnostique indisponible.", "error");
+        return;
+      }
+
+      setSupabaseConfigured(true); // Temporarily turn it back on to test
+      const check = await (dbService as any).checkSupabaseConnection();
+      
+      if (check.success) {
+        setSupabaseConfigured(true);
+        setSupabaseSetupNeeded(false);
+        showToast("Connexion Cloud Supabase opérationnelle ! 🎉", "success");
+        // Reload data
+        await fetchAppConfigAndData();
+        await fetchAdminTransactions();
+      } else {
+        setSupabaseConfigured(false);
+        setSupabaseSetupNeeded(true);
+        const errorMsg = check.error || "Certaines tables n'ont pas encore été créées.";
+        setCloudErrorDetails(errorMsg);
+        showToast("Échec de connexion au Cloud. Des tables sont manquantes ou incorrectes.", "error");
+      }
+    } catch (e: any) {
+      setSupabaseConfigured(false);
+      setSupabaseSetupNeeded(true);
+      setCloudErrorDetails(e.message || String(e));
+      showToast("Erreur lors du test de connexion.", "error");
+    } finally {
+      setIsCheckingCloud(false);
+    }
+  };
 
   // App Config and General Data State
   const [config, setConfig] = useState<AppConfig>({
@@ -190,6 +260,39 @@ export default function App() {
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4500);
+  };
+
+  const [copiedSql, setCopiedSql] = useState(false);
+  const handleCopySQL = async () => {
+    try {
+      const res = await fetch('/api/setup-sql');
+      if (!res.ok) {
+        throw new Error("HTTP error " + res.status);
+      }
+      const data = await res.json();
+      if (data && data.sql) {
+        const performCopy = () => {
+          setCopiedSql(true);
+          showToast("Script SQL copié ! Collez-le dans l'éditeur SQL de votre projet Supabase.", 'success');
+          setTimeout(() => setCopiedSql(false), 5000);
+        };
+
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          try {
+            await navigator.clipboard.writeText(data.sql);
+            performCopy();
+          } catch (err) {
+            fallbackCopyText(data.sql, performCopy);
+          }
+        } else {
+          fallbackCopyText(data.sql, performCopy);
+        }
+      } else {
+        showToast("Erreur : impossible de lire le script SQL d'initialisation.", 'error');
+      }
+    } catch (e) {
+      showToast('Erreur lors de la récupération ou de la copie du script SQL.', 'error');
+    }
   };
 
   const [notificationPermission, setNotificationPermission] = useState<string>(() => {
@@ -378,6 +481,12 @@ export default function App() {
 
   // Initialize general app configs
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).onSupabaseFallbackOccurred = () => {
+        setSupabaseSetupNeeded(true);
+      };
+    }
+
     fetchAppConfigAndData();
     
     // Check if referee link is active via URL params
@@ -389,16 +498,33 @@ export default function App() {
     }
   }, []);
 
-  // Update data state depending on user session
+  // Update data state depending on user session with automatic server synchronization
   useEffect(() => {
     if (user) {
-      if (user.role === 'admin') {
-        setIsAdminMode(true);
-        fetchAdminTransactions();
-      } else {
-        setIsAdminMode(false);
-        fetchClientUserData(user.phone);
+      // Gather any previous operations in local storage to migrate them securely
+      const localDB = localStorage.getItem('starbetpay_local_db');
+      let localTxs: DBTransaction[] = [];
+      try {
+        if (localDB) {
+          const parsed = JSON.parse(localDB);
+          if (Array.isArray(parsed.transactions)) {
+            localTxs = parsed.transactions.filter((tx: DBTransaction) => tx.userPhone === user.phone);
+          }
+        }
+      } catch (e) {
+        console.error('Error parsing local storage DB for sync:', e);
       }
+
+      // Proactively sync user credentials and transactions to database.json on backend server
+      dbService.syncUserWithServer(user, localTxs).then(() => {
+        if (user.role === 'admin') {
+          setIsAdminMode(true);
+          fetchAdminTransactions();
+        } else {
+          setIsAdminMode(false);
+          fetchClientUserData(user.phone);
+        }
+      });
     } else {
       setIsAdminMode(false);
     }
@@ -629,7 +755,7 @@ export default function App() {
     }
   };
 
-  // Action: Login User Action (Triggers MFA prompt)
+  // Action: Login User Action (Triggers MFA prompt only if enabled)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError('');
@@ -641,9 +767,32 @@ export default function App() {
         authForm.password
       );
 
-      // Correct credentials, proceed to full-factor verification block
-      setTempUser(data.tempUser);
-      setMfaCode('');
+      if (data.tempUser && !data.tempUser.mfaEnabled) {
+        // Direct seamless login bypass
+        const fullUser = {
+          phone: data.tempUser.phone,
+          name: data.tempUser.name,
+          role: data.tempUser.role,
+          parentPhone: data.tempUser.parentPhone,
+          referralCode: data.tempUser.referralCode,
+          balanceCommission: data.tempUser.balanceCommission || 0,
+          balanceCommissionWithdrawn: data.tempUser.balanceCommissionWithdrawn || 0,
+          mfaEnabled: false,
+          createdAt: data.tempUser.createdAt
+        };
+        setUser(fullUser);
+        localStorage.setItem('starbetpay_user', JSON.stringify(fullUser));
+        setTempUser(null);
+        try {
+          sessionStorage.removeItem('starbetpay_popup_dismissed');
+        } catch {}
+        setIsClientPopupDismissed(false);
+        showToast("Connexion réussie ! 🚀", "success");
+      } else {
+        // Move to MFA entry screen
+        setTempUser(data.tempUser);
+        setMfaCode('');
+      }
     } catch (err: any) {
       setAuthError(err.message || 'Une erreur de connexion est survenue. Veuillez vérifier votre réseau.');
     }
@@ -1221,21 +1370,24 @@ export default function App() {
             </div>
 
             {/* DEMO ACCOUNTS HELPER PRE-AUTH */}
-            <div className="bg-gradient-to-br from-[#12213e]/80 to-[#10192e]/80 border border-cyan-500/20 rounded-2xl p-4 mb-6 text-xs text-gray-300">
-              <div className="flex items-center gap-2 mb-2 text-cyan-400 font-bold">
-                <ShieldAlert size={15} />
-                <span>ACCÈS DÉMONSTRATION COMPLET</span>
+            {showDemoHelper && (
+              <div className="bg-gradient-to-br from-[#12213e]/80 to-[#10192e]/80 border border-cyan-500/20 rounded-2xl p-4 mb-6 text-xs text-gray-300 animate-fade-in animate-duration-150">
+                <div className="flex items-center gap-2 mb-2 text-cyan-400 font-bold">
+                  <ShieldAlert size={15} />
+                  <span>ACCÈS DÉMONSTRATION COMPLET</span>
+                </div>
+                <p className="text-[11px] text-gray-400 mb-1">Visualisez immédiatement l'application avec les deux comptes :</p>
+                <div className="space-y-1 mt-2 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px]">
+                  <div>🔑 <strong className="text-cyan-400">ADMINISTRATEUR :</strong> Phone: <strong className="text-white">0197656263</strong> | Pass: <strong className="text-white">Azertyui0p</strong></div>
+                  <div className="pt-1 border-t border-slate-800/60">👤 <strong className="text-cyan-400">CLIENT COMPTE :</strong> Phone: <strong className="text-white">0161616161</strong> | Pass: <strong className="text-white">Password123</strong></div>
+                </div>
               </div>
-              <p className="text-[11px] text-gray-400 mb-1">Visualisez immédiatement l'application avec les deux comptes :</p>
-              <div className="space-y-1 mt-2 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px] space-y-1">
-                <div>🔑 <strong className="text-cyan-400">ADMINISTRATEUR :</strong> Phone: <strong className="text-white">0197656263</strong> | Pass: <strong className="text-white">Azertyui0p</strong></div>
-                <div className="pt-1 border-t border-slate-800/60">👤 <strong className="text-cyan-400">CLIENT COMPTE :</strong> Phone: <strong className="text-white">0161616161</strong> | Pass: <strong className="text-white">Password123</strong></div>
-              </div>
-            </div>
+            )}
 
             {/* LOGIN / SIGNUP CARD */}
             {!tempUser ? (
-              <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden">
+              <>
+                <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-6 shadow-xl relative overflow-hidden">
                 
                 {/* Visual tabs */}
                 <div className="grid grid-cols-2 bg-slate-950/50 p-1.5 rounded-xl mb-6">
@@ -1334,6 +1486,17 @@ export default function App() {
                   En continuant, vous acceptez nos conditions d'utilisation et notre politique de confidentialité StarBetPay.
                 </p>
               </div>
+
+              <div className="flex justify-center mt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowDemoHelper(!showDemoHelper)}
+                  className="text-[10px] text-gray-400 hover:text-cyan-400 transition-colors py-1.5 px-3 bg-slate-900/40 rounded-full border border-slate-850 hover:border-cyan-500/20 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <span>{showDemoHelper ? "🔒 Masquer l'accès démo (Production)" : "🔧 Activer l'aide au test (Mode Démo)"}</span>
+                </button>
+              </div>
+            </>
             ) : (
               /* SECURE MULTI-FACTOR AUTHENTICATION COMPONENT SCREEN */
               <div className="bg-[#111a33] border border-cyan-500/20 rounded-3xl p-6 shadow-xl relative animate-fade-in">
@@ -1345,10 +1508,12 @@ export default function App() {
                   <p className="text-gray-300 text-xs mt-1">Authentification Multifacteur (MFA) récurrente active.</p>
                 </div>
 
-                <div className="bg-cyan-950/40 rounded-xl p-3 border border-cyan-500/20 text-[11px] text-gray-300 mb-5 leading-relaxed">
-                  <p className="font-semibold text-cyan-400">🚨 Code MFA Démonstration :</p>
-                  <p className="mt-1">Entrez le code de vérification <strong className="text-white bg-cyan-900 px-1 py-0.5 rounded">1234</strong> ou tout code de votre choix pour passer cette étape de sécurité élevée.</p>
-                </div>
+                {showDemoHelper && (
+                  <div className="bg-cyan-950/40 rounded-xl p-3 border border-cyan-500/20 text-[11px] text-gray-300 mb-5 leading-relaxed">
+                    <p className="font-semibold text-cyan-400">🚨 Code MFA Démonstration :</p>
+                    <p className="mt-1">Entrez le code de vérification <strong className="text-white bg-cyan-900 px-1 py-0.5 rounded">1234</strong> ou tout code de votre choix pour passer cette étape de sécurité élevée.</p>
+                  </div>
+                )}
 
                 <form onSubmit={handleVerifyMFA} className="space-y-4">
                   <div>
@@ -1396,6 +1561,78 @@ export default function App() {
         {/* IF USER COMPLETED LOGIN PROCESS */}
         {user && (
           <div>
+            
+            {/* Supabase incomplete setup fallback notice banner */}
+            {supabaseSetupNeeded && (
+              <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 mb-5 shadow-lg flex flex-col md:flex-row gap-4 items-start md:items-center justify-between text-xs text-amber-300 animate-fade-in">
+                <div className="flex gap-3">
+                  <span className="text-xl shrink-0">⚠️</span>
+                  <div>
+                    <h4 className="font-bold text-amber-200">Mode Cloud Supabase Inactif (Serveur Local Détecté)</h4>
+                    <p className="text-gray-300 text-[11px] mt-0.5 leading-relaxed font-sans">
+                      L'application a détecté que votre base de données Supabase n'est pas initialisée ou que la connexion a échoué. 
+                      Les données proviennent actuellement du <strong>serveur local de secours</strong> pour assurer le bon fonctionnement de l'application.
+                      {user && user.role === 'admin' && (
+                        <span className="block mt-1.5 font-bold text-cyan-400">
+                          💡 En tant qu'administrateur, rendez-vous dans l'onglet <strong>Administration</strong> puis sous-onglet <strong>Configuration ⚙️</strong> ci-dessous pour entrer vos accès de projet Supabase, tester la connexion et forcer la bascule en production !
+                        </span>
+                      )}
+                    </p>
+                    <div className="mt-2.5 flex flex-wrap gap-2">
+                      <button
+                        onClick={handleCopySQL}
+                        className="px-3 py-1.5 bg-cyan-500/10 hover:bg-cyan-500/20 active:bg-cyan-500/30 border border-cyan-500/30 rounded-xl text-[10px] font-bold text-cyan-400 cursor-pointer transition-colors shadow flex items-center gap-1.5"
+                      >
+                        {copiedSql ? (
+                          <>
+                            <span className="text-emerald-400 font-bold">✓</span>
+                            <span>Script SQL Copié !</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>📋</span>
+                            <span>Copier le script SQL d'initialisation</span>
+                          </>
+                        )}
+                      </button>
+
+                      <button
+                        onClick={handleCheckAndForceCloud}
+                        disabled={isCheckingCloud}
+                        className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-450 active:scale-95 disabled:bg-emerald-500/20 disabled:scale-100 disabled:text-emerald-300/40 text-slate-950 rounded-xl text-[10px] font-black cursor-pointer transition-all shadow flex items-center gap-1.5"
+                      >
+                        {isCheckingCloud ? (
+                          <>
+                            <span className="animate-spin inline-block">⏳</span>
+                            <span>Test de connexion...</span>
+                          </>
+                        ) : (
+                          <>
+                            <span>🔌</span>
+                            <span>Tester & Réactiver le Cloud maintenant</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {cloudErrorDetails && (
+                      <div className="mt-2 p-2 bg-slate-950/60 border border-slate-800 rounded-xl font-mono text-[9px] text-red-400 overflow-x-auto max-w-full leading-normal">
+                        <strong>Erreur :</strong> {cloudErrorDetails}
+                        <div className="mt-1 text-gray-400 font-sans text-[10px]">
+                          Veuillez créer les tables requises en exécutant le script SQL d'initialisation ci-dessus dans votre éditeur SQL Supabase.
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSupabaseSetupNeeded(false)} 
+                  className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 active:bg-amber-500/40 border border-amber-500/20 rounded-xl text-[10px] font-bold text-amber-200 shrink-0 self-end md:self-center cursor-pointer transition-colors shadow"
+                >
+                  OK, Compris
+                </button>
+              </div>
+            )}
             
             {/* PUBLIC BANNER INFO DIALOG */}
             {config.popupEnabled && activeTab === 'home' && !isAdminMode && (
@@ -2820,9 +3057,74 @@ export default function App() {
                   const sponsorWithdrawnTotal = allUsers.reduce((sum, u) => sum + (u.balanceCommissionWithdrawn || 0), 0);
                   const sponsorAccumulatedTotal = sponsorBalanceTotal + sponsorWithdrawnTotal;
 
+                  const isCloudActive = isSupabaseConfigured;
+                  const isEmptyCloudDb = isCloudActive && totalUsersCount <= 1 && depositCount === 0;
+
                   return (
                     <div className="space-y-6 animate-fade-in text-gray-100 pb-10">
                       
+                      {/* Interactive Cloud Database Initializer */}
+                      {isCloudActive && (
+                        <div className={`bg-[#0f1935] border border-cyan-500/20 rounded-3xl p-5 shadow-xl transition-all relative overflow-hidden ${isEmptyCloudDb ? 'ring-2 ring-amber-500/30' : ''}`}>
+                          <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
+                          
+                          <div className="flex gap-4 items-start">
+                            <div className="w-10 h-10 rounded-xl bg-cyan-500/10 border border-cyan-500/25 flex items-center justify-center text-cyan-400 shrink-0 mt-0.5">
+                              <span className="text-xl">☁️</span>
+                            </div>
+                            
+                            <div className="space-y-1.5 flex-1">
+                              <h4 className="text-xs font-black font-display uppercase text-cyan-400 flex items-center gap-1.5 leading-none">
+                                Base Cloud Supabase
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/20 text-[8px] font-bold text-emerald-400">ACTIVE</span>
+                              </h4>
+                              
+                              {isEmptyCloudDb ? (
+                                <div className="space-y-1">
+                                  <p className="text-amber-400 text-[11px] font-semibold leading-relaxed">
+                                    ⚠️ Votre base Supabase est active mais vide (0 utilisateur, 0 transaction en ligne).
+                                  </p>
+                                  <p className="text-gray-300 text-[11px] leading-relaxed">
+                                    Vos tables Cloud sont prêtes mais ne contiennent aucune ligne de données. C'est pourquoi toutes vos statistiques s'affichent à <strong>0 FCFA</strong>.
+                                    Pour copier et synchroniser instantanément toutes vos données locales de démonstration (l'utilisateur <strong>Agbozo</strong>, l'historique des transactions, les coupons, etc.) sur votre Cloud, cliquez ci-dessous.
+                                  </p>
+                                </div>
+                              ) : (
+                                <p className="text-gray-300 text-[11px] leading-relaxed">
+                                  Votre application lit vos statistiques et utilisateurs directement depuis votre serveur Cloud Supabase en temps réel. 
+                                  Vous pouvez ré-injecter ou restaurer les données initiales de démonstration locales à tout moment en cliquant ci-dessous.
+                                </p>
+                              )}
+                              
+                              <div className="pt-2 flex flex-wrap gap-2.5">
+                                <button
+                                  type="button"
+                                  onClick={handleSyncCloudData}
+                                  disabled={isSyncingCloud}
+                                  className={`px-3.5 py-1.5 rounded-xl text-[10px] font-black shadow transition-all cursor-pointer flex items-center gap-1.5 ${
+                                    isSyncingCloud
+                                      ? 'bg-cyan-500/20 text-cyan-300/60 border border-cyan-500/10 cursor-not-allowed'
+                                      : 'bg-cyan-500 hover:bg-cyan-450 active:scale-95 text-slate-950'
+                                  }`}
+                                >
+                                  {isSyncingCloud ? (
+                                    <>
+                                      <span className="inline-block animate-spin">⏱️</span>
+                                      <span>Synchronisation en cours...</span>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <span>🔄</span>
+                                      <span>{isEmptyCloudDb ? "Remplir mon Cloud avec les données locales maintenant" : "Ré-injecter les données locales"}</span>
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
                       {/* Operational Cards */}
                       <div>
                         <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 font-display">
@@ -3744,6 +4046,177 @@ export default function App() {
                 {/* 5. ADMINISTRATION: CONFIG SHEET CONTROLLER */}
                 {adminTab === 'config' && (
                   <div className="space-y-5 animate-fade-in">
+
+                    {/* Diagnostic & Synchro Card */}
+                    <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl relative overflow-hidden">
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
+                      
+                      <div className="flex justify-between items-center pb-2.5 border-b border-slate-800">
+                        <h4 className="text-xs font-extrabold font-display uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                          <span>⚙️</span>
+                          Base de données & Synchronisation Cloud
+                        </h4>
+                        
+                        <div className="flex items-center gap-1.5">
+                          {isSupabaseConfigured ? (
+                            <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20 shadow-sm">
+                              ● CLOUD CONNECTÉ
+                            </span>
+                          ) : (
+                            <span className="text-[10px] font-mono font-bold text-amber-500 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20 shadow-sm">
+                              ⚠️ MODE LOCAL ACTIF
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <p className="text-gray-300 text-[11px] leading-relaxed">
+                        Pour que StarBetPay fonctionne à 100% avec votre Cloud Supabase en production, vous devez initialiser votre base de données Supabase. Si votre base est vide ou si des requêtes échouent, le système bascule automatiquement sur la base locale de secours.
+                      </p>
+
+                      {/* Configuration manuelle dynamique des secrets Supabase */}
+                      <div className="bg-slate-950/25 p-4 rounded-2xl border border-slate-805/80 space-y-3">
+                        <div className="flex items-center gap-2 text-[11px] font-bold text-cyan-400">
+                          <span>🔑</span>
+                          <span>IDENTIFIANTS CLOUD SUPABASE</span>
+                        </div>
+                        <p className="text-gray-400 text-[10px] leading-relaxed">
+                          Si vous n'avez pas défini les variables d'environnement dans vos secrets Google AI Studio, saisissez simplement votre URL et votre Clé Anon publique ci-dessous pour les stocker localement dans votre navigateur et activer instantanément la production en ligne.
+                        </p>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-gray-400 text-[10px] uppercase font-bold mb-1">URL du projet Supabase</label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: https://xxxxxxxxx.supabase.co"
+                              className="w-full bg-[#070b19] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500 font-mono"
+                              value={credUrl}
+                              onChange={(e) => setCredUrl(e.target.value)}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-gray-405 text-[10px] uppercase font-bold mb-1">Clé API Anon (Anon Key)</label>
+                            <input 
+                              type="password" 
+                              placeholder="Ex: eyJhbGciOi..."
+                              className="w-full bg-[#070b19] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white placeholder-gray-600 focus:outline-none focus:border-cyan-500 font-mono"
+                              value={credAnonKey}
+                              onChange={(e) => setCredAnonKey(e.target.value)}
+                            />
+                          </div>
+                        </div>
+                        <div className="flex justify-end gap-2 pt-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCredUrl('');
+                              setCredAnonKey('');
+                              updateSupabaseConfig('', '');
+                              showToast('Identifiants réinitialisés (Retour au local)', 'info');
+                            }}
+                            className="px-3 py-1.5 bg-slate-900 hover:bg-slate-850 text-gray-400 border border-slate-800 rounded-xl text-[10px] font-bold cursor-pointer transition-colors"
+                          >
+                            Effacer
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleCheckAndForceCloud()}
+                            className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-450 text-slate-950 rounded-xl text-[10px] font-black cursor-pointer transition-colors flex items-center gap-1 shadow-sm"
+                          >
+                            💾 Enregistrer & Tester la Connexion
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800/80 space-y-3">
+                        <div className="flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
+                          <div>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Étape 1 : Créer les tables</span>
+                            <span className="text-[11px] text-gray-300">Exécutez le script SQL d'initialisation dans Supabase.</span>
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={handleCopySQL}
+                            className="w-full sm:w-auto px-3 py-2 bg-slate-900 hover:bg-[#1a213a] text-cyan-400 border border-slate-800 rounded-xl text-[10px] font-black cursor-pointer transition-all flex items-center justify-center gap-1.5"
+                          >
+                            {copiedSql ? (
+                              <>
+                                <span className="text-emerald-400">✓</span>
+                                <span>SQL Copié !</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>📋</span>
+                                <span>Copier le script SQL</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-900 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
+                          <div>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Étape 2 : Connecter & Activer</span>
+                            <span className="text-[11px] text-gray-300">Tester la structure et forcer le mode en ligne.</span>
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={handleCheckAndForceCloud}
+                            disabled={isCheckingCloud}
+                            className="w-full sm:w-auto px-3 py-2 bg-emerald-500 hover:bg-emerald-450 text-slate-950 rounded-xl text-[10px] font-black disabled:bg-slate-800 disabled:text-gray-500 cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10"
+                          >
+                            {isCheckingCloud ? (
+                              <>
+                                <span className="animate-spin text-xs">⏳</span>
+                                <span>Test en cours...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>🔌</span>
+                                <span>Tester & Forcer le Cloud</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+
+                        <div className="pt-3 border-t border-slate-900 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
+                          <div>
+                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Étape 3 : Envoyer les données</span>
+                            <span className="text-[11px] text-gray-300">Remplir le Cloud vide avec les données locales de démonstration (Coupons, etc.).</span>
+                          </div>
+                          
+                          <button
+                            type="button"
+                            onClick={handleSyncCloudData}
+                            disabled={isSyncingCloud}
+                            className="w-full sm:w-auto px-3 py-2 bg-[#00f0ff] hover:bg-[#00d0dd] text-slate-950 rounded-xl text-[10px] font-black disabled:bg-[#111a33] disabled:text-gray-500 cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-500/10"
+                          >
+                            {isSyncingCloud ? (
+                              <>
+                                <span className="animate-spin text-xs">⚡</span>
+                                <span>Synchronisation...</span>
+                              </>
+                            ) : (
+                              <>
+                                <span>📤</span>
+                                <span>Remplir le Cloud maintenant</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+
+                      {cloudErrorDetails && (
+                        <div className="p-3 bg-red-950/20 border border-red-500/20 rounded-2xl text-[10px] font-mono text-red-400 leading-normal overflow-x-auto">
+                          <strong>Erreur de diagnostic :</strong>
+                          <div className="mt-1">{cloudErrorDetails}</div>
+                          <div className="mt-1.5 text-gray-400 font-sans text-[10.5px]">
+                            Veuillez vous assurer que toutes les tables ont été créées dans l'éditeur SQL de votre console Supabase. Pas de panique, le mode local de secours reste 100% opérationnel !
+                          </div>
+                        </div>
+                      )}
+                    </div>
                     
                     {/* Public Banner Form */}
                     <form onSubmit={handleUpdateConfig} className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl">
