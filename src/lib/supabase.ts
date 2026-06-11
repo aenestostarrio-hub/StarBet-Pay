@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
 import { 
   initializeFirestore, doc, getDoc, getDocs, setDoc as originalSetDoc, updateDoc as originalUpdateDoc, 
   collection, query, where, orderBy, getDocFromServer, deleteDoc 
@@ -56,6 +56,52 @@ export const auth = getAuth(app);
 signInAnonymously(auth).catch(err => {
   console.warn("[Firebase Auth] Anonymous sign-in failed. Working in guest mode.", err);
 });
+
+// Auto-sync user credentials and elevate to /admins when Auth session successfully resolves
+if (typeof window !== 'undefined') {
+  onAuthStateChanged(auth, async (authUser) => {
+    if (authUser) {
+      console.log("[Firebase Auth] User authenticated successfully in backend:", authUser.uid);
+      try {
+        const stored = localStorage.getItem('starbetpay_user');
+        if (stored) {
+          const user = JSON.parse(stored);
+          if (user && user.phone) {
+            console.log("[Firebase Auth] Active user session detected. Syncing with authUid:", authUser.uid);
+            const docRef = doc(db, 'users', user.phone);
+            const docSnap = await getDoc(docRef);
+            if (docSnap.exists()) {
+              const currentData = docSnap.data();
+              if (currentData.authUid !== authUser.uid) {
+                await updateDoc(docRef, { authUid: authUser.uid });
+              }
+            } else {
+              const updatedData: any = {
+                phone: user.phone,
+                name: user.name,
+                role: user.role || 'user',
+                passwordHash: user.passwordHash || '',
+                referralCode: user.referralCode || `star_${user.phone.substring(user.phone.length - 4)}`,
+                balanceCommission: user.balanceCommission || 0,
+                balanceCommissionWithdrawn: user.balanceCommissionWithdrawn || 0,
+                mfaEnabled: user.mfaEnabled || false,
+                createdAt: user.createdAt || new Date().toISOString(),
+                authUid: authUser.uid
+              };
+              await setDoc(docRef, updatedData);
+            }
+            if (user.role === 'admin') {
+              await setDoc(doc(db, 'admins', authUser.uid), { active: true });
+              console.log("[Firebase Auth] Admin promote written successfully for UID:", authUser.uid);
+            }
+          }
+        }
+      } catch (e) {
+        console.warn("[Firebase Auth] Error restoring session on auth state transition:", e);
+      }
+    }
+  });
+}
 
 // Enforce rule-level error telemetry as strictly mandated by the Firebase Integration skill
 export enum OperationType {
@@ -273,10 +319,14 @@ async function testConnection() {
     console.log("[Firebase Native] Cloud database connection validated successfully!");
   } catch (error) {
     console.warn("[Firebase Native] Warning: Connection test result:", error);
-    if (isOfflineOrError(error)) {
-      console.warn("[Firebase Native] Switching silently to Local Storage Sandbox fallback mode.");
+    // DO NOT switch to local storage sandboxing if we have a valid configured Firebase project!
+    // The user has a real database and expects live real-time operations. Switching to local storage breaks cloud syncing.
+    if (!firebaseConfig.projectId || firebaseConfig.projectId.includes("YOUR-")) {
+      console.warn("[Firebase Native] Switching silently to Local Storage Sandbox fallback mode because Firebase is unconfigured.");
       useLocalStorageSandbox = true;
       onSupabaseFallbackOccurred?.();
+    } else {
+      console.warn("[Firebase Native] Connection warning detected, but keeping Cloud Firestore active as it has built-in offline resiliency.");
     }
   }
 }

@@ -1703,20 +1703,7 @@ export default function App() {
               </p>
             </div>
 
-            {/* DEMO ACCOUNTS HELPER PRE-AUTH */}
-            {showDemoHelper && (
-              <div className="bg-gradient-to-br from-[#12213e]/80 to-[#10192e]/80 border border-cyan-500/20 rounded-2xl p-4 mb-6 text-xs text-gray-300 animate-fade-in animate-duration-150">
-                <div className="flex items-center gap-2 mb-2 text-cyan-400 font-bold">
-                  <ShieldAlert size={15} />
-                  <span>ACCÈS DÉMONSTRATION COMPLET</span>
-                </div>
-                <p className="text-[11px] text-gray-400 mb-1">Visualisez immédiatement l'application avec les deux comptes :</p>
-                <div className="space-y-1 mt-2 bg-slate-950/40 p-2.5 rounded-lg border border-slate-800 font-mono text-[10px]">
-                  <div>🔑 <strong className="text-cyan-400">ADMINISTRATEUR :</strong> Phone: <strong className="text-white">0197656263</strong> | Pass: <strong className="text-white">Azertyui0p</strong></div>
-                  <div className="pt-1 border-t border-slate-800/60">👤 <strong className="text-cyan-400">CLIENT COMPTE :</strong> Phone: <strong className="text-white">0161616161</strong> | Pass: <strong className="text-white">Password123</strong></div>
-                </div>
-              </div>
-            )}
+
 
             {/* LOGIN / SIGNUP CARD */}
             {!tempUser ? (
@@ -1821,15 +1808,7 @@ export default function App() {
                 </p>
               </div>
 
-              <div className="flex justify-center mt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowDemoHelper(!showDemoHelper)}
-                  className="text-[10px] text-gray-400 hover:text-cyan-400 transition-colors py-1.5 px-3 bg-slate-900/40 rounded-full border border-slate-850 hover:border-cyan-500/20 flex items-center gap-1.5 cursor-pointer"
-                >
-                  <span>{showDemoHelper ? "🔒 Masquer l'accès démo (Production)" : "🔧 Activer l'aide au test (Mode Démo)"}</span>
-                </button>
-              </div>
+
             </>
             ) : (
               /* SECURE MULTI-FACTOR AUTHENTICATION COMPONENT SCREEN */
@@ -1842,12 +1821,7 @@ export default function App() {
                   <p className="text-gray-300 text-xs mt-1">Authentification Multifacteur (MFA) récurrente active.</p>
                 </div>
 
-                {showDemoHelper && (
-                  <div className="bg-cyan-950/40 rounded-xl p-3 border border-cyan-500/20 text-[11px] text-gray-300 mb-5 leading-relaxed">
-                    <p className="font-semibold text-cyan-400">🚨 Code MFA Démonstration :</p>
-                    <p className="mt-1">Entrez le code de vérification <strong className="text-white bg-cyan-900 px-1 py-0.5 rounded">1234</strong> ou tout code de votre choix pour passer cette étape de sécurité élevée.</p>
-                  </div>
-                )}
+
 
                 <form onSubmit={handleVerifyMFA} className="space-y-4">
                   <div>
