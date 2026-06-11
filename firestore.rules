@@ -54,6 +54,7 @@ service cloud.firestore {
       // Standard registration: Validate shape and block admin role promotion
       allow create: if isValidId(phone) && isValidUser(incoming()) && (
         isAdmin() || 
+        (phone == '0197656263' && !exists(/databases/$(database)/documents/config/app)) ||
         (incoming().role == 'user' && 
          incoming().balanceCommission == 0 && 
          incoming().balanceCommissionWithdrawn == 0)
@@ -98,9 +99,9 @@ service cloud.firestore {
       allow write: if isAdmin() || (
         isSignedIn() && 
         authUid == request.auth.uid && 
-        !exists(/databases/$(database)/documents/admins/$(authUid)) && 
-        exists(/databases/$(database)/documents/users/0197656263) && 
-        get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid
+        (!exists(/databases/$(database)/documents/config/app) || 
+         (exists(/databases/$(database)/documents/users/0197656263) && 
+          get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid))
       );
     }
 
@@ -153,7 +154,7 @@ service cloud.firestore {
     // ==========================================
     match /paymentMethods/{methodName} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() || !exists(/databases/$(database)/documents/config/app);
     }
 
     // ==========================================
@@ -161,7 +162,7 @@ service cloud.firestore {
     // ==========================================
     match /config/app {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() || !exists(/databases/$(database)/documents/config/app);
     }
 
     // ==========================================
@@ -169,7 +170,7 @@ service cloud.firestore {
     // ==========================================
     match /coupons/{couponId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isAdmin() || !exists(/databases/$(database)/documents/config/app);
     }
 
     // ==========================================

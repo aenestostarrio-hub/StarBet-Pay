@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
-import { dbService, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
+import { onSnapshot, collection, query, where, doc } from 'firebase/firestore';
+import { dbService, db, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
 
@@ -261,6 +262,56 @@ export default function App() {
     setTimeout(() => {
       setToasts(prev => prev.filter(t => t.id !== id));
     }, 4500);
+  };
+
+  // Real-time In-App Notifications Feed History System
+  const [inAppNotifications, setInAppNotifications] = useState<Array<{
+    id: string;
+    title: string;
+    message: string;
+    date: string;
+    read: boolean;
+    type: 'success' | 'error' | 'info' | 'warning';
+  }>>(() => {
+    try {
+      const stored = localStorage.getItem('starbetpay_in_app_notifications');
+      return stored ? JSON.parse(stored) : [
+        {
+          id: 'welcome-system-notif',
+          title: 'Bienvenue chez StarBetPay ! 🎉',
+          message: 'Votre compte est actif et synchronisé en temps réel avec le cloud Firestore.',
+          date: new Date().toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }),
+          read: false,
+          type: 'success'
+        }
+      ];
+    } catch {
+      return [];
+    }
+  });
+
+  const [showNotificationCenter, setShowNotificationCenter] = useState(false);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('starbetpay_in_app_notifications', JSON.stringify(inAppNotifications));
+    } catch (e) {
+      console.warn("Storage limits or permissions for notifications:", e);
+    }
+  }, [inAppNotifications]);
+
+  const addInAppNotification = (title: string, message: string, type: 'success' | 'error' | 'info' | 'warning' = 'info') => {
+    const newNotif = {
+      id: Date.now().toString() + Math.random().toString(),
+      title,
+      message,
+      date: new Date().toLocaleString('fr-FR', {
+        day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit'
+      }),
+      read: false,
+      type
+    };
+    setInAppNotifications(prev => [newNotif, ...prev]);
   };
 
   const [copiedSql, setCopiedSql] = useState(false);
@@ -535,14 +586,38 @@ export default function App() {
   useEffect(() => {
     let eventSource: EventSource | null = null;
     let pollInterval: any = null;
+    let unsubscribeTxs: (() => void) | null = null;
+    let unsubscribeUsers: (() => void) | null = null;
+    let unsubscribeConfig: (() => void) | null = null;
+    let unsubscribeCoupons: (() => void) | null = null;
+    let unsubscribeUserStats: (() => void) | null = null;
 
     const triggerNativeNotification = (title: string, body: string) => {
       try {
         if ('Notification' in window && Notification.permission === 'granted') {
-          new Notification(title, {
-            body,
-            icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
-          });
+          if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.ready.then((reg) => {
+              reg.showNotification(title, {
+                body,
+                icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
+                badge: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
+                vibrate: [150, 100, 150],
+                tag: 'starbetpay-notif-' + Date.now(),
+                renotify: true
+              } as any);
+            }).catch((err) => {
+              console.warn("ServiceWorker push fallback:", err);
+              new Notification(title, {
+                body,
+                icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+              });
+            });
+          } else {
+            new Notification(title, {
+              body,
+              icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+            });
+          }
         }
       } catch (e) {
         console.warn("Native desktop notification helper:", e);
@@ -556,134 +631,231 @@ export default function App() {
 
     // A. SYNC WORKER FOR ADMINISTRATORS
     if (user.role === 'admin') {
-      // 1. Setup SSE connection (if local standalone fallback is not active)
-      if (!isSupabaseConfigured && !useLocalStorageSandbox) {
+      if (!useLocalStorageSandbox) {
+        console.log('[StarBetPay] Starting native real-time Firestore listeners for Admin.');
         try {
-          eventSource = new EventSource('/api/admin/notifications-sse');
-          
-          eventSource.onmessage = (event) => {
-            try {
-              const data = JSON.parse(event.data);
-              if (data && data.heartbeat) {
-                return; // skip heartbeat raw pings
-              }
-              const tx = data as DBTransaction;
-              if (tx && tx.id && !knownTxIdsRef.current.has(tx.id)) {
-                knownTxIdsRef.current.add(tx.id);
-                playChimeNotification();
-                setAdminNotifications(prev => {
-                  if (prev.some(p => p.id === tx.id)) return prev;
-                  return [tx, ...prev];
-                });
-                
-                // Show alerts
-                const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
-                showToast(notifyMsg, 'info');
-                triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
-
-                // Refresh current tables
-                fetchAdminTransactions();
-              }
-            } catch (err) {
-              console.error('[SSE event processing failed]:', err);
+          // Listen to all transactions in real time
+          const qTxs = collection(db, 'transactions');
+          unsubscribeTxs = onSnapshot(qTxs, (snapshot) => {
+            const freshTxs: DBTransaction[] = [];
+            snapshot.forEach((docSnap) => {
+              freshTxs.push(docSnap.data() as DBTransaction);
+            });
+            // Sort by ID descending
+            const sortedTxs = freshTxs.sort((a, b) => b.id.localeCompare(a.id));
+            
+            const isFirstRun = knownTxIdsRef.current.size === 0;
+            if (isFirstRun) {
+              sortedTxs.forEach(t => knownTxIdsRef.current.add(t.id));
+            } else {
+              sortedTxs.forEach(tx => {
+                if (!knownTxIdsRef.current.has(tx.id)) {
+                  knownTxIdsRef.current.add(tx.id);
+                  playChimeNotification();
+                  setAdminNotifications(prev => {
+                    if (prev.some(p => p.id === tx.id)) return prev;
+                    return [tx, ...prev];
+                  });
+                  
+                  // Trigger desktop & in-app alerts
+                  const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                  showToast(notifyMsg, 'info');
+                  triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
+                  addInAppNotification("Nouvelle Transaction 🔔", notifyMsg, 'info');
+                }
+              });
             }
-          };
+            setTransactions(sortedTxs);
+          }, (err) => {
+            console.warn("Transactions onSnapshot failed (switching to fallback):", err);
+          });
 
-          eventSource.onerror = (err) => {
-            console.warn('Admin SSE notification stream paused or reconnecting...', err);
-          };
-        } catch (err) {
-          console.warn('EventSource initialization bypassed: ', err);
+          // Listen to all users in real time
+          const qUsers = collection(db, 'users');
+          unsubscribeUsers = onSnapshot(qUsers, (snapshot) => {
+            const usersData: DBUser[] = [];
+            snapshot.forEach((docSnap) => {
+              usersData.push(docSnap.data() as DBUser);
+            });
+            setAllUsers(usersData);
+          });
+
+          // Listen to config app doc in real time
+          const docConfig = doc(db, 'config', 'app');
+          unsubscribeConfig = onSnapshot(docConfig, (snap) => {
+            if (snap.exists()) {
+              setConfig(snap.data() as AppConfig);
+            }
+          });
+
+        } catch (e) {
+          console.error("Failed to start Admin onSnapshot, fallback active:", e);
         }
       }
 
-      // 2. Active, ultra-robust background polling fallback every 2.0 seconds
-      pollInterval = setInterval(async () => {
-        try {
-          const freshTxs = await dbService.getTransactions();
-          
-          // Populate reference set if raw empty on mount
-          const isFirstRun = knownTxIdsRef.current.size === 0;
-          if (isFirstRun) {
-            freshTxs.forEach(t => knownTxIdsRef.current.add(t.id));
-          }
-
-          freshTxs.forEach(tx => {
-            if (!knownTxIdsRef.current.has(tx.id)) {
-              knownTxIdsRef.current.add(tx.id);
-              
-              // Only trigger chime if it's not the first loading list execution
-              if (!isFirstRun) {
-                playChimeNotification();
-                setAdminNotifications(prev => {
-                  if (prev.some(p => p.id === tx.id)) return prev;
-                  return [tx, ...prev];
-                });
-                
-                // Trigger desktop & in-app alerts
-                const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
-                showToast(notifyMsg, 'info');
-                triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
-              }
+      // 2. Active, ultra-robust background polling fallback if offline/sandbox
+      if (useLocalStorageSandbox) {
+        pollInterval = setInterval(async () => {
+          try {
+            const freshTxs = await dbService.getTransactions();
+            const isFirstRun = knownTxIdsRef.current.size === 0;
+            if (isFirstRun) {
+              freshTxs.forEach(t => knownTxIdsRef.current.add(t.id));
             }
-          });
 
-          // Update transactions list
-          setTransactions(freshTxs);
+            freshTxs.forEach(tx => {
+              if (!knownTxIdsRef.current.has(tx.id)) {
+                knownTxIdsRef.current.add(tx.id);
+                if (!isFirstRun) {
+                  playChimeNotification();
+                  setAdminNotifications(prev => {
+                    if (prev.some(p => p.id === tx.id)) return prev;
+                    return [tx, ...prev];
+                  });
+                  const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                  showToast(notifyMsg, 'info');
+                  triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
+                  addInAppNotification("Nouvelle Transaction 🔔", notifyMsg, 'info');
+                }
+              }
+            });
 
-          // Periodically load baseline active users
-          const usersData = await dbService.getUsers();
-          setAllUsers(usersData);
-        } catch (e) {
-          console.warn('Admin background sync loop issue:', e);
-        }
-      }, 2000);
-
+            setTransactions(freshTxs);
+            const usersData = await dbService.getUsers();
+            setAllUsers(usersData);
+          } catch (e) {
+            console.warn('Admin background sync loop issue:', e);
+          }
+        }, 2000);
+      }
     } 
     // B. SYNC WORKER FOR CLIENTS (REGULAR USERS)
     else {
-      // Setup client automatic synchronization polling every 2.0 seconds
-      pollInterval = setInterval(async () => {
+      if (!useLocalStorageSandbox) {
+        console.log(`[StarBetPay] Starting native real-time Firestore listeners for user ${user.phone}`);
         try {
-          // 1. Fetch user transactions list
-          const freshTxs = await dbService.getTransactions(user.phone);
-          
-          // Detect status transitions (pending -> validated/rejected)
-          transactionsRef.current.forEach(oldTx => {
-            const correspondingFresh = freshTxs.find(f => f.id === oldTx.id);
-            if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
-              if (correspondingFresh.status === 'validated') {
-                playChimeNotification();
-                const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
-                showToast(text, 'success');
-                triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
-              } else if (correspondingFresh.status === 'rejected') {
-                playChimeNotification();
-                const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
-                showToast(text, 'error');
-                triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
+          // Listen to client specific transactions
+          const qClientTxs = query(collection(db, 'transactions'), where('userPhone', '==', user.phone));
+          unsubscribeTxs = onSnapshot(qClientTxs, (snapshot) => {
+            const freshTxs: DBTransaction[] = [];
+            snapshot.forEach((docSnap) => {
+              freshTxs.push(docSnap.data() as DBTransaction);
+            });
+            const sortedTxs = freshTxs.sort((a, b) => b.id.localeCompare(a.id));
+
+            // Detect status transitions (pending -> validated/rejected)
+            transactionsRef.current.forEach(oldTx => {
+              const correspondingFresh = sortedTxs.find(f => f.id === oldTx.id);
+              if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
+                if (correspondingFresh.status === 'validated') {
+                  playChimeNotification();
+                  const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
+                  showToast(text, 'success');
+                  triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
+                  addInAppNotification("Opération Validée 🎉", text, 'success');
+                } else if (correspondingFresh.status === 'rejected') {
+                  playChimeNotification();
+                  const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
+                  showToast(text, 'error');
+                  triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
+                  addInAppNotification("Opération Refusée ❌", text, 'error');
+                }
               }
+            });
+
+            setTransactions(sortedTxs);
+          }, (err) => {
+            console.warn("Client transactions listener failed (switching to fallback):", err);
+          });
+
+          // Listen to config app doc
+          const docConfig = doc(db, 'config', 'app');
+          unsubscribeConfig = onSnapshot(docConfig, (snap) => {
+            if (snap.exists()) {
+              setConfig(snap.data() as AppConfig);
             }
           });
 
-          setTransactions(freshTxs);
+          // Listen to coupons
+          const qCoupons = collection(db, 'coupons');
+          unsubscribeCoupons = onSnapshot(qCoupons, (snap) => {
+            const list: SportCoupon[] = [];
+            snap.forEach(d => {
+              list.push(d.data() as SportCoupon);
+            });
+            if (list.length > 0) {
+              setCoupons(list);
+            }
+          });
 
-          // 2. Fetch user parent/referral stats
-          const freshStats = await dbService.getUserStats(user.phone);
-          setRefStats(freshStats);
+          // Listen to active user stats
+          const docUser = doc(db, 'users', user.phone);
+          unsubscribeUserStats = onSnapshot(docUser, (snap) => {
+            if (snap.exists()) {
+              const freshUser = snap.data() as DBUser;
+              const qRefs = query(collection(db, 'users'), where('parentPhone', '==', user.phone));
+              onSnapshot(qRefs, (snapRefs) => {
+                setRefStats({
+                  phone: freshUser.phone,
+                  name: freshUser.name,
+                  balanceCommission: Number(freshUser.balanceCommission || 0),
+                  balanceCommissionWithdrawn: Number(freshUser.balanceCommissionWithdrawn || 0),
+                  filleulsCount: snapRefs.size || 0,
+                  referralCode: freshUser.referralCode
+                });
+              });
+            }
+          });
 
-          // 3. Keep sport coupons & popup settings up to date
-          const freshCoupons = await dbService.getCoupons();
-          setCoupons(freshCoupons);
         } catch (e) {
-          console.warn('Client background sync loop issue:', e);
+          console.error("Failed to start Client onSnapshot, fallback active:", e);
         }
-      }, 2000);
+      }
+
+      // Setup client automatic synchronization polling fallback
+      if (useLocalStorageSandbox) {
+        pollInterval = setInterval(async () => {
+          try {
+            const freshTxs = await dbService.getTransactions(user.phone);
+            transactionsRef.current.forEach(oldTx => {
+              const correspondingFresh = freshTxs.find(f => f.id === oldTx.id);
+              if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
+                if (correspondingFresh.status === 'validated') {
+                  playChimeNotification();
+                  const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
+                  showToast(text, 'success');
+                  triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
+                  addInAppNotification("Opération Validée 🎉", text, 'success');
+                } else if (correspondingFresh.status === 'rejected') {
+                  playChimeNotification();
+                  const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
+                  showToast(text, 'error');
+                  triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
+                  addInAppNotification("Opération Refusée ❌", text, 'error');
+                }
+              }
+            });
+
+            setTransactions(freshTxs);
+            const freshStats = await dbService.getUserStats(user.phone);
+            setRefStats(freshStats);
+            const freshCoupons = await dbService.getCoupons();
+            setCoupons(freshCoupons);
+          } catch (e) {
+            console.warn('Client background sync loop issue:', e);
+          }
+        }, 2000);
+      }
     }
 
     return () => {
       if (pollInterval) clearInterval(pollInterval);
       if (eventSource) eventSource.close();
+      if (unsubscribeTxs) unsubscribeTxs();
+      if (unsubscribeUsers) unsubscribeUsers();
+      if (unsubscribeConfig) unsubscribeConfig();
+      if (unsubscribeCoupons) unsubscribeCoupons();
+      if (unsubscribeUserStats) unsubscribeUserStats();
     };
   }, [user]);
 
@@ -1388,10 +1560,124 @@ export default function App() {
               </span>
             )}
 
+            {/* Real-time Notification Bell with Floating Dropdown */}
+            <div className="relative">
+              <button 
+                onClick={() => setShowNotificationCenter(!showNotificationCenter)}
+                title="Mon carnet de notifications"
+                className="relative p-2 text-gray-300 hover:text-white hover:bg-slate-800 rounded-xl transition-all cursor-pointer flex items-center justify-center"
+              >
+                <Bell size={16} />
+                {inAppNotifications.filter(n => !n.read).length > 0 && (
+                  <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-[9px] font-bold text-white flex items-center justify-center rounded-full animate-pulse shadow-md shadow-red-500/10">
+                    {inAppNotifications.filter(n => !n.read).length}
+                  </span>
+                )}
+              </button>
+
+              {showNotificationCenter && (
+                <>
+                  {/* Click outside backdrop */}
+                  <div className="fixed inset-0 z-40" onClick={() => setShowNotificationCenter(false)} />
+                  <div className="absolute right-0 mt-2 w-80 bg-[#101b35] border border-cyan-500/20 rounded-2xl shadow-xl shadow-black/80 p-4 z-50 animate-fade-in text-gray-100 max-h-[420px] overflow-y-auto">
+                    <div className="flex items-center justify-between border-b border-cyan-500/10 pb-2 mb-3">
+                      <div className="flex items-center gap-1.5">
+                        <Bell size={14} className="text-cyan-400" />
+                        <h4 className="font-extrabold text-sm font-display tracking-tight text-gray-100">Notifications</h4>
+                        {inAppNotifications.filter(n => !n.read).length > 0 && (
+                          <span className="bg-cyan-500/20 text-cyan-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
+                            {inAppNotifications.filter(n => !n.read).length} nvl(s)
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex gap-2">
+                        {inAppNotifications.length > 0 && (
+                          <button 
+                            onClick={() => {
+                              setInAppNotifications(prev => prev.map(n => ({ ...n, read: true })));
+                              showToast("Toutes les notifications marquées comme lues.", "info");
+                            }}
+                            className="text-[10px] text-cyan-400 hover:text-cyan-300 font-semibold uppercase hover:underline cursor-pointer"
+                          >
+                            Tout lire
+                          </button>
+                        )}
+                        <button 
+                          onClick={() => setShowNotificationCenter(false)}
+                          className="text-[10px] text-gray-400 hover:text-white cursor-pointer"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
+                      {inAppNotifications.length === 0 ? (
+                        <div className="text-center py-8 text-gray-400 text-xs">
+                          <Bell size={24} className="mx-auto mb-2 opacity-20 text-cyan-400" />
+                          <p>Aucune notification</p>
+                          <p className="text-[10px] opacity-70 mt-0.5">Vos mises à jour s'afficheront ici en direct.</p>
+                        </div>
+                      ) : (
+                        inAppNotifications.map((notif) => (
+                          <div 
+                            key={notif.id} 
+                            className={`p-2.5 rounded-xl border text-xs transition-all ${
+                              notif.read 
+                                ? 'bg-[#0b1225]/40 border-slate-800/60 opacity-60' 
+                                : 'bg-[#152449]/70 border-cyan-500/15 ring-1 ring-cyan-500/5'
+                            }`}
+                          >
+                            <div className="flex justify-between items-start mb-1 gap-2">
+                              <span className={`font-bold ${
+                                notif.type === 'success' ? 'text-emerald-400' :
+                                notif.type === 'error' ? 'text-red-400' :
+                                notif.type === 'warning' ? 'text-amber-400' : 'text-cyan-400'
+                              }`}>
+                                {notif.title}
+                              </span>
+                              <span className="text-[9px] text-gray-500 font-medium whitespace-nowrap">{notif.date}</span>
+                            </div>
+                            <p className="text-gray-300 text-[11px] leading-relaxed mb-2">{notif.message}</p>
+                            
+                            {!notif.read && (
+                              <button 
+                                onClick={() => {
+                                  setInAppNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
+                                }}
+                                className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold transition-all cursor-pointer"
+                              >
+                                Marquer comme lu
+                              </button>
+                            )}
+                          </div>
+                        ))
+                      )}
+                    </div>
+
+                    {inAppNotifications.length > 0 && (
+                      <div className="border-t border-cyan-500/10 pt-2.5 mt-3 flex justify-between items-center">
+                        <span className="text-[9px] text-gray-400 font-mono">Canal temps réel actif ⚡</span>
+                        <button 
+                          onClick={() => {
+                            setInAppNotifications([]);
+                            showToast("Historique des notifications effacé.", "info");
+                          }}
+                          className="text-[10px] text-red-400 hover:text-red-300 font-medium uppercase font-sans hover:underline cursor-pointer"
+                        >
+                          Effacer tout
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
+
             <button 
               onClick={handleLogout}
               title="Se déconnecter"
-              className="p-2 text-red-400 hover:bg-red-500/10 rounded-xl transition-all"
+              className="p-2 text-red-400 hover:bg-red-500/10 rounded-xl transition-all cursor-pointer flex items-center justify-center"
             >
               <LogOut size={16} />
             </button>
