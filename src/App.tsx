@@ -7,8 +7,8 @@ import {
 } from 'lucide-react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
-import { onSnapshot, collection, query, where, doc } from 'firebase/firestore';
-import { dbService, db, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
+import { onSnapshot, collection, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
+import { dbService, db, auth, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
 
@@ -526,6 +526,21 @@ export default function App() {
       
       const usersData = await dbService.getUsers();
       setAllUsers(usersData);
+
+      // Make absolutely sure their /admins/{authUid} is verified and written if current user role is admin!
+      const currentAuthUid = auth.currentUser?.uid;
+      if (currentAuthUid && user && user.role === 'admin') {
+        try {
+          const adminDocRef = doc(db, 'admins', currentAuthUid);
+          const adminDocSnap = await getDoc(adminDocRef);
+          if (!adminDocSnap.exists()) {
+            console.log("[Firebase Sync] Generating missing admin authorization node for active admin:", currentAuthUid);
+            await setDoc(adminDocRef, { active: true });
+          }
+        } catch (adminErr) {
+          console.warn("[Firebase Sync] Tried auto-elevating admin node but was blocked:", adminErr);
+        }
+      }
     } catch (e) {
       console.error(e);
     }

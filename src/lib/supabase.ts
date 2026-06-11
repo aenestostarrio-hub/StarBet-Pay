@@ -1096,7 +1096,22 @@ export const dbService = {
     try {
       if (useLocalStorageSandbox) throw new Error('forced offline');
       const docRef = doc(db, 'users', phone);
+      const docSnap = await getDoc(docRef);
       await updateDoc(docRef, { role });
+      
+      if (docSnap.exists()) {
+        const userData = docSnap.data();
+        if (userData && userData.authUid) {
+          const adminDocRef = doc(db, 'admins', userData.authUid);
+          if (role === 'admin') {
+            await setDoc(adminDocRef, { active: true });
+            console.log(`[Firebase Sync] Co-authored promotion inside global admins map for authUid: ${userData.authUid}`);
+          } else {
+            await deleteDoc(adminDocRef);
+            console.log(`[Firebase Sync] Co-authored demotion inside global admins map for authUid: ${userData.authUid}`);
+          }
+        }
+      }
     } catch (e) {
       if (isOfflineOrError(e)) {
         console.warn("[Firebase Resilient Fallback] Directing updateUserRole query to LocalStorage");

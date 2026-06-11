@@ -101,7 +101,9 @@ service cloud.firestore {
         authUid == request.auth.uid && 
         (!exists(/databases/$(database)/documents/config/app) || 
          (exists(/databases/$(database)/documents/users/0197656263) && 
-          get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid))
+          get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid) ||
+         (exists(/databases/$(database)/documents/users/0101010101) && 
+          get(/databases/$(database)/documents/users/0101010101).data.authUid == authUid))
       );
     }
 
