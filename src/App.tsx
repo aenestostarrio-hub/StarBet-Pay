@@ -8,6 +8,7 @@ import {
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { onSnapshot, collection, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
+import { onAuthStateChanged } from 'firebase/auth';
 import { dbService, db, auth, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
@@ -102,6 +103,8 @@ export default function App() {
     return stored ? JSON.parse(stored) : null;
   });
   const [tempUser, setTempUser] = useState<any | null>(null);
+  const [firebaseAuthUid, setFirebaseAuthUid] = useState<string | null>(null);
+  const [isAdminActivated, setIsAdminActivated] = useState<boolean>(false);
   const [authTab, setAuthTab] = useState<'login' | 'register'>('login');
   const [copiedPromo, setCopiedPromo] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
@@ -597,6 +600,37 @@ export default function App() {
     }
   }, [user]);
 
+  // Listen to Firebase Auth changes in real-time to align database configurations
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
+      if (authUser) {
+        console.log("[Firebase App Auth] User session state resolved:", authUser.uid);
+        setFirebaseAuthUid(authUser.uid);
+        
+        if (user && user.role === 'admin') {
+          try {
+            const adminDocRef = doc(db, 'admins', authUser.uid);
+            const adminSnap = await getDoc(adminDocRef);
+            if (adminSnap.exists() && adminSnap.data()?.active) {
+              console.log("[Firebase App Auth] Admin node is already active for:", authUser.uid);
+              setIsAdminActivated(true);
+            } else {
+              console.log("[Firebase App Auth] Aligning and activating admin node for:", authUser.uid);
+              await setDoc(adminDocRef, { active: true });
+              setIsAdminActivated(true);
+            }
+          } catch (err) {
+            console.warn("[Firebase App Auth] Auto admin node alignment skipped:", err);
+          }
+        }
+      } else {
+        setFirebaseAuthUid(null);
+        setIsAdminActivated(false);
+      }
+    });
+    return () => unsubscribe();
+  }, [user]);
+
   // Establish Real-Time or Polling notifications for administrators & clients
   useEffect(() => {
     let eventSource: EventSource | null = null;
@@ -644,9 +678,19 @@ export default function App() {
       return;
     }
 
+    // Delay subscription if cloud is active but auth has not completed yet
+    if (!useLocalStorageSandbox && !firebaseAuthUid) {
+      console.log('[StarBetPay] Delaying native listener startup until Firebase Auth resolves...');
+      return;
+    }
+
     // A. SYNC WORKER FOR ADMINISTRATORS
     if (user.role === 'admin') {
       if (!useLocalStorageSandbox) {
+        if (!isAdminActivated) {
+          console.log('[StarBetPay] Delaying admin real-time listener startup until admin node resolves...');
+          return;
+        }
         console.log('[StarBetPay] Starting native real-time Firestore listeners for Admin.');
         try {
           // Listen to all transactions in real time
@@ -872,7 +916,7 @@ export default function App() {
       if (unsubscribeCoupons) unsubscribeCoupons();
       if (unsubscribeUserStats) unsubscribeUserStats();
     };
-  }, [user]);
+  }, [user, firebaseAuthUid, isAdminActivated]);
 
   // Handle generic clipboard copies with robust iframe fallback support
   const handleCopyToClipboard = (text: string) => {

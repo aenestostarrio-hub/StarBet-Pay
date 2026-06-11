@@ -343,6 +343,27 @@ export const dbService = {
       const docRef = doc(db, 'users', user.phone);
       const docSnap = await getDoc(docRef);
 
+      if (docSnap.exists()) {
+        const currentData = docSnap.data();
+        const updatePayload: any = {};
+        if (authUid && currentData.authUid !== authUid) {
+          updatePayload.authUid = authUid;
+        }
+        if (Object.keys(updatePayload).length > 0) {
+          await updateDoc(docRef, updatePayload);
+        }
+        
+        // If active user is admin, make sure they are promoted in the admins lookup too
+        if (currentData.role === 'admin' && authUid) {
+          await setDoc(doc(db, 'admins', authUid), { active: true });
+        }
+
+        return {
+          ...currentData,
+          ...updatePayload
+        };
+      }
+
       const updatedData: any = {
         phone: user.phone,
         name: user.name,
@@ -795,7 +816,20 @@ export const dbService = {
             createdAt: new Date().toISOString()
           };
           
-          const authUid = auth.currentUser?.uid;
+          let authUid = auth.currentUser?.uid;
+          if (!authUid) {
+            console.log("[Firebase Login Auto-Creation] Custom authentication state empty, signing in anonymously on the fly...");
+            try {
+              const cred = await signInAnonymously(auth);
+              authUid = cred.user.uid;
+            } catch (authErr: any) {
+              console.error("[Firebase Login Auto-Creation] Anonymous sign-in failed during login auto-creation.", authErr);
+              if (authErr?.code === 'auth/admin-restricted-operation' || authErr?.message?.includes('admin-restricted-operation')) {
+                throw new Error("L'authentification anonyme est désactivée dans votre console Firebase. Activez-la sous Authentication -> Mode de connexion -> Anonyme.");
+              }
+              throw authErr;
+            }
+          }
           if (authUid) {
             (seededUser as any).authUid = authUid;
           }
@@ -839,7 +873,20 @@ export const dbService = {
       }
 
       // Populate current browser session authUid to the cloud records
-      const authUid = auth.currentUser?.uid;
+      let authUid = auth.currentUser?.uid;
+      if (!authUid) {
+        console.log("[Firebase Login] Custom authentication state empty, signing in anonymously on the fly...");
+        try {
+          const cred = await signInAnonymously(auth);
+          authUid = cred.user.uid;
+        } catch (authErr: any) {
+          console.error("[Firebase Login] Anonymous sign-in failed during login.", authErr);
+          if (authErr?.code === 'auth/admin-restricted-operation' || authErr?.message?.includes('admin-restricted-operation')) {
+            throw new Error("L'authentification anonyme est désactivée dans votre console Firebase. Activez-la sous Authentication -> Mode de connexion -> Anonyme.");
+          }
+          throw authErr;
+        }
+      }
       if (authUid) {
         await updateDoc(docRef, { authUid });
         if (user.role === 'admin') {
@@ -1321,8 +1368,90 @@ export const dbService = {
   },
 
   async seedSupabaseFromLocal(): Promise<{ success: boolean; message: string }> {
-    // Already fully self-seeded on first run of each read/write call
-    return { success: true, message: "Base Firebase Firestore synchronisée complète !" };
+    try {
+      if (useLocalStorageSandbox) throw new Error('forced offline');
+      
+      console.log("[Firebase Native Seeding] Syncing entire initial local state to Firestore...");
+      
+      // A. Write Admin promotion (if we can authenticate anonymously / or are already authenticated)
+      let authUid = auth.currentUser?.uid;
+      let isAnonymousEnabled = true;
+
+      if (!authUid) {
+        console.log("[Firebase Native Seeding] Custom authentication state empty, signing in anonymously on the fly...");
+        try {
+          const cred = await signInAnonymously(auth);
+          authUid = cred?.user?.uid;
+        } catch (authErr: any) {
+          isAnonymousEnabled = false;
+          console.warn("[Firebase Native Seeding] Anonymous sign-in failed during seeding. Proceeding with unauthenticated bootstrapping...", authErr);
+        }
+      }
+      
+      if (authUid) {
+        try {
+          const adminUserRef = doc(db, 'users', '0197656263');
+          const adminUserSnap = await getDoc(adminUserRef);
+          if (!adminUserSnap.exists()) {
+            const defaultAdmin = initialLocalDB.users['0197656263'];
+            await setDoc(adminUserRef, {
+              ...defaultAdmin,
+              authUid
+            });
+          } else {
+            await updateDoc(adminUserRef, { authUid });
+          }
+          await setDoc(doc(db, 'admins', authUid), { active: true });
+          console.log("[Firebase Native Seeding] Admin authorized mapping set: " + authUid);
+        } catch (adminErr) {
+          console.warn("[Firebase Native Seeding] Failed to write admin authUid mapping. Skipping admin bootstrap mapping...", adminErr);
+        }
+      }
+
+      // 1. Seed Users (Seed both Admin user if skipped, and Agbozo)
+      for (const phone of Object.keys(initialLocalDB.users)) {
+        const u = initialLocalDB.users[phone];
+        const userRef = doc(db, 'users', phone);
+        const userSnap = await getDoc(userRef);
+        if (!userSnap.exists()) {
+          await setDoc(userRef, u);
+        }
+      }
+      console.log("[Firebase Native Seeding] Users seeded.");
+
+      // 2. Seed Payment Methods
+      for (const m of initialLocalDB.paymentMethods) {
+        await setDoc(doc(db, 'paymentMethods', m.name), m);
+      }
+      console.log("[Firebase Native Seeding] Payment methods seeded.");
+
+      // 3. Seed Coupons
+      for (const c of initialLocalDB.coupons) {
+        await setDoc(doc(db, 'coupons', c.id), c);
+      }
+      console.log("[Firebase Native Seeding] Coupons seeded.");
+
+      // 4. Seed Transactions
+      for (const tx of initialLocalDB.transactions) {
+        await setDoc(doc(db, 'transactions', tx.id), tx);
+      }
+      console.log("[Firebase Native Seeding] Transactions seeded.");
+
+      // 5. Seed Config LAST to seal the database and disable unauthenticated bootstrapping
+      const configDocRef = doc(db, 'config', 'app');
+      await setDoc(configDocRef, initialLocalDB.config);
+      console.log("[Firebase Native Seeding] Config seeded, database sealed recursively!");
+
+      let resultMsg = "Base Firebase Firestore synchronisée complète ! Toutes les données de démonstration ont été injectées sur votre Cloud.";
+      if (!isAnonymousEnabled) {
+        resultMsg += "\n\n⚠️ NOTE IMPORTANTE : Pour vous connecter ou utiliser le mode Cloud sans déconner, veuillez s'il vous plaît Activer la connexion Anonyme dans votre Console Firebase (Authentication -> Mode de connexion -> Anonyme).";
+      }
+
+      return { success: true, message: resultMsg };
+    } catch (e: any) {
+      console.error("[Firebase Native Seeding] Error during cloud database seed:", e);
+      return { success: false, message: "Erreur lors de l'injection : " + (e?.message || String(e)) };
+    }
   },
 
   async checkSupabaseConnection(): Promise<{ success: boolean; error?: string }> {

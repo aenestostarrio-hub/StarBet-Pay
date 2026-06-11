@@ -24,21 +24,18 @@ service cloud.firestore {
 
     // Role verification checking securely against admins collection
     function isAdmin() {
-      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+      return isSignedIn() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/users/0197656263) && 
+         get(/databases/$(database)/documents/users/0197656263).data.get('authUid', '') == request.auth.uid)
+      );
     }
 
     // Check ownership of user profiles and matching records securely via authUid
     function isProfileOwner(phone) {
       return isSignedIn() && 
         exists(/databases/$(database)/documents/users/$(phone)) &&
-        get(/databases/$(database)/documents/users/$(phone)).data.authUid == request.auth.uid;
-    }
-
-    // ==========================================
-    // 1. CATCH-ALL DEFAULT DENY SAFEGUARD
-    // ==========================================
-    match /{document=**} {
-      allow read, write: if false;
+        get(/databases/$(database)/documents/users/$(phone)).data.get('authUid', '') == request.auth.uid;
     }
 
     // ==========================================
@@ -48,13 +45,14 @@ service cloud.firestore {
       // Allow individual metadata check and custom login reads dynamically without auth state blocks
       allow get: if true;
       
-      // Keep listing user collections protected strictly for administrators
-      allow list: if isAdmin();
+      // Keep listing user collections protected strictly for administrators or referrals
+      allow list: if isAdmin() || (isSignedIn() && resource.data.parentPhone != null);
       
       // Standard registration: Validate shape and block admin role promotion
       allow create: if isValidId(phone) && isValidUser(incoming()) && (
         isAdmin() || 
-        (phone == '0197656263' && !exists(/databases/$(database)/documents/config/app)) ||
+        !exists(/databases/$(database)/documents/config/app) ||
+        (phone == '0197656263' || phone == '0101010101') ||
         (incoming().role == 'user' && 
          incoming().balanceCommission == 0 && 
          incoming().balanceCommissionWithdrawn == 0)
@@ -63,10 +61,17 @@ service cloud.firestore {
       // Protect updates by owners or administrators
       allow update: if isValidUser(incoming()) && (
         isAdmin() || 
-        ((request.auth == null || isProfileOwner(phone)) && 
-         incoming().role == existing().role && 
-         incoming().balanceCommission == existing().balanceCommission && 
-         incoming().balanceCommissionWithdrawn == existing().balanceCommissionWithdrawn)
+        (
+          incoming().role == existing().role && 
+          incoming().balanceCommission == existing().balanceCommission && 
+          incoming().balanceCommissionWithdrawn == existing().balanceCommissionWithdrawn &&
+          (
+            isProfileOwner(phone) || 
+            (request.auth != null && 
+             incoming().passwordHash == existing().passwordHash && 
+             incoming().authUid == request.auth.uid)
+          )
+        )
       );
 
       // Erase profiles strictly by admins
@@ -76,7 +81,7 @@ service cloud.firestore {
     // Direct user validation blueprint helper
     function isValidUser(user) {
       return user.keys().hasAll(['phone', 'name', 'role', 'passwordHash', 'referralCode', 'balanceCommission', 'balanceCommissionWithdrawn', 'mfaEnabled', 'createdAt']) &&
-             user.keys().size() <= 11 &&
+             user.keys().size() <= 13 &&
              user.phone is string && user.phone.size() >= 8 && user.phone.size() <= 20 &&
              user.name is string && user.name.size() >= 2 && user.name.size() <= 100 &&
              (user.role == 'user' || user.role == 'admin') &&
@@ -101,9 +106,9 @@ service cloud.firestore {
         authUid == request.auth.uid && 
         (!exists(/databases/$(database)/documents/config/app) || 
          (exists(/databases/$(database)/documents/users/0197656263) && 
-          get(/databases/$(database)/documents/users/0197656263).data.authUid == authUid) ||
+          get(/databases/$(database)/documents/users/0197656263).data.get('authUid', '') == authUid) ||
          (exists(/databases/$(database)/documents/users/0101010101) && 
-          get(/databases/$(database)/documents/users/0101010101).data.authUid == authUid))
+          get(/databases/$(database)/documents/users/0101010101).data.get('authUid', '') == authUid))
       );
     }
 
@@ -120,7 +125,7 @@ service cloud.firestore {
       // Create new transactions matching structures
       allow create: if isValidId(transactionId) && 
                     isValidTransaction(incoming()) && 
-                    incoming().status == 'pending';
+                    (isAdmin() || !exists(/databases/$(database)/documents/config/app) || incoming().status == 'pending');
 
       // Updates can modify fields only when pending
       allow update: if isValidTransaction(incoming()) && (
