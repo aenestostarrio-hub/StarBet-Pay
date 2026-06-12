@@ -79,7 +79,7 @@ if (typeof window !== 'undefined') {
                 name: user.name,
                 role: user.role || 'user',
                 passwordHash: user.passwordHash || '',
-                referralCode: user.referralCode || `star_${user.phone.substring(user.phone.length - 4)}`,
+                referralCode: user.referralCode || `STAR${authUser.uid.substring(0, 6).toUpperCase()}`,
                 balanceCommission: user.balanceCommission || 0,
                 balanceCommissionWithdrawn: user.balanceCommissionWithdrawn || 0,
                 mfaEnabled: user.mfaEnabled || false,
@@ -368,7 +368,7 @@ export const dbService = {
         name: user.name,
         role: user.role || 'user',
         passwordHash: user.passwordHash || '',
-        referralCode: user.referralCode || `star_${user.phone.substring(user.phone.length - 4)}`,
+        referralCode: user.referralCode || (authUid ? `STAR${authUid.substring(0, 6).toUpperCase()}` : `star_${user.phone.substring(user.phone.length - 4)}`),
         balanceCommission: user.balanceCommission || 0,
         balanceCommissionWithdrawn: user.balanceCommissionWithdrawn || 0,
         mfaEnabled: user.mfaEnabled || false,
@@ -763,24 +763,6 @@ export const dbService = {
         }
       }
 
-      // Generate a polished unique referral code derived from email username
-      const usernamePrefix = phone.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
-      const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-      const referralCode = `star_${usernamePrefix}_${randomSuffix}`;
-      
-      const newUser: DBUser = {
-        phone,
-        name,
-        role: 'user',
-        passwordHash,
-        parentPhone: cleanParentPhone || undefined,
-        referralCode,
-        balanceCommission: 0,
-        balanceCommissionWithdrawn: 0,
-        mfaEnabled: false,
-        createdAt: new Date().toISOString()
-      };
-
       // [Firebase Migration] Robust Email/Password Authentication registration
       const email = phone.trim();
       let authUid = '';
@@ -794,6 +776,22 @@ export const dbService = {
         }
         throw new Error(authErr.message || "Erreur lors de la création du compte d'authentification.");
       }
+
+      // Generate a polished unique referral code derived from user auth uid: STARXXXXXX
+      const referralCode = `STAR${authUid.substring(0, 6).toUpperCase()}`;
+      
+      const newUser: DBUser = {
+        phone,
+        name,
+        role: 'user',
+        passwordHash,
+        parentPhone: cleanParentPhone || undefined,
+        referralCode,
+        balanceCommission: 0,
+        balanceCommissionWithdrawn: 0,
+        mfaEnabled: false,
+        createdAt: new Date().toISOString()
+      };
 
       if (authUid) {
         (newUser as any).authUid = authUid;
@@ -819,9 +817,8 @@ export const dbService = {
           }
         }
 
-        const usernamePrefix = phone.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
-        const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
-        const referralCode = `star_${usernamePrefix}_${randomSuffix}`;
+        const fakeUid = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const referralCode = `STAR${fakeUid}`;
 
         const newUser: DBUser = {
           phone,
@@ -941,7 +938,7 @@ export const dbService = {
           name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
           role: isDemoAdmin ? 'admin' : 'user',
           passwordHash: passwordHash,
-          referralCode: isDemoAdmin ? 'star_admin' : 'star_agbozo',
+          referralCode: isDemoAdmin ? 'STARADMIN' : `STAR${authUid.substring(0, 6).toUpperCase()}`,
           balanceCommission: isDemoAdmin ? 0 : 4500,
           balanceCommissionWithdrawn: isDemoAdmin ? 0 : 1000,
           mfaEnabled: false,
@@ -999,7 +996,7 @@ export const dbService = {
               name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
               role: isDemoAdmin ? 'admin' : 'user',
               passwordHash,
-              referralCode: isDemoAdmin ? 'star_admin' : 'star_agbozo',
+              referralCode: isDemoAdmin ? 'STARADMIN' : `STAR${Math.random().toString(36).substring(2, 8).toUpperCase()}`,
               balanceCommission: isDemoAdmin ? 0 : 4500,
               balanceCommissionWithdrawn: isDemoAdmin ? 0 : 1000,
               mfaEnabled: false,

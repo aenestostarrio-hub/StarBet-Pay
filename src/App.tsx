@@ -125,6 +125,7 @@ export default function App() {
   });
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
+  const [isAuthLoading, setIsAuthLoading] = useState(false);
   const [firebaseSetupNeeded, setFirebaseSetupNeeded] = useState(false);
   const [isForceFirebase, setIsForceFirebase] = useState(forceFirebaseProduction);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
@@ -607,6 +608,7 @@ export default function App() {
     let unsubscribeUsers: (() => void) | null = null;
     let unsubscribeConfig: (() => void) | null = null;
     let unsubscribeCoupons: (() => void) | null = null;
+    let unsubscribePaymentMethods: (() => void) | null = null;
     let unsubscribeUserStats: (() => void) | null = null;
 
     const triggerNativeNotification = (title: string, body: string) => {
@@ -715,6 +717,35 @@ export default function App() {
             }
           });
 
+          // Listen to payment methods in real time for admins
+          const qPaymentMethods = collection(db, 'paymentMethods');
+          unsubscribePaymentMethods = onSnapshot(qPaymentMethods, (snap) => {
+            const list: PaymentMethod[] = [];
+            snap.forEach((docSnap) => {
+              list.push(docSnap.data() as PaymentMethod);
+            });
+            if (list.length > 0) {
+              setPaymentMethods(list);
+              const activePm = list.find((p: PaymentMethod) => p.active);
+              if (activePm) {
+                setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+                setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+              }
+            }
+          });
+
+          // Listen to all coupons in real time for admins
+          const qCouponsAdmin = collection(db, 'coupons');
+          unsubscribeCoupons = onSnapshot(qCouponsAdmin, (snap) => {
+            const list: SportCoupon[] = [];
+            snap.forEach(d => {
+              list.push(d.data() as SportCoupon);
+            });
+            if (list.length > 0) {
+              setCoupons(list);
+            }
+          });
+
         } catch (e) {
           console.error("Failed to start Admin onSnapshot, fallback active:", e);
         }
@@ -803,6 +834,23 @@ export default function App() {
             }
           });
 
+          // Listen to payment methods in real time
+          const qPaymentMethods = collection(db, 'paymentMethods');
+          unsubscribePaymentMethods = onSnapshot(qPaymentMethods, (snap) => {
+            const list: PaymentMethod[] = [];
+            snap.forEach((docSnap) => {
+              list.push(docSnap.data() as PaymentMethod);
+            });
+            if (list.length > 0) {
+              setPaymentMethods(list);
+              const activePm = list.find((p: PaymentMethod) => p.active);
+              if (activePm) {
+                setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+                setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+              }
+            }
+          });
+
           // Listen to coupons
           const qCoupons = collection(db, 'coupons');
           unsubscribeCoupons = onSnapshot(qCoupons, (snap) => {
@@ -882,6 +930,7 @@ export default function App() {
       if (unsubscribeUsers) unsubscribeUsers();
       if (unsubscribeConfig) unsubscribeConfig();
       if (unsubscribeCoupons) unsubscribeCoupons();
+      if (unsubscribePaymentMethods) unsubscribePaymentMethods();
       if (unsubscribeUserStats) unsubscribeUserStats();
     };
   }, [user, firebaseAuthUid, isAdminActivated]);
@@ -936,8 +985,10 @@ export default function App() {
   // Action: Register User Action
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthLoading) return;
     setAuthError('');
     setAuthSuccess('');
+    setIsAuthLoading(true);
 
     try {
       await dbService.register(
@@ -952,14 +1003,18 @@ export default function App() {
       setAuthTab('login');
     } catch (err: any) {
       setAuthError(err.message || 'Erreur lors de l\'enregistrement.');
+    } finally {
+      setIsAuthLoading(false);
     }
   };
 
   // Action: Login User Action (Triggers MFA prompt only if enabled)
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isAuthLoading) return;
     setAuthError('');
     setAuthSuccess('');
+    setIsAuthLoading(true);
 
     try {
       const data = await dbService.login(
@@ -995,6 +1050,8 @@ export default function App() {
       }
     } catch (err: any) {
       setAuthError(err.message || 'Une erreur de connexion est survenue. Veuillez vérifier votre réseau.');
+    } finally {
+      setIsAuthLoading(false);
     }
   };
 
@@ -1554,19 +1611,6 @@ export default function App() {
             <h1 className="text-base font-extrabold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">StarBetPay</h1>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[10px] text-gray-400 font-medium font-mono uppercase tracking-widest">1XBET • DÉPÔT & RETRAIT</span>
-              {isFirebaseConfigured ? (
-                <span className="text-[8px] font-mono tracking-wider text-emerald-400 font-bold bg-emerald-500/10 px-1 py-0.2 rounded border border-emerald-500/20">
-                  ● CLOUD
-                </span>
-              ) : useLocalStorageSandbox ? (
-                <span className="text-[8px] font-mono tracking-wider text-amber-400 font-bold bg-amber-500/10 px-1 py-0.2 rounded border border-amber-500/20">
-                  ▲ SANDBOX
-                </span>
-              ) : (
-                <span className="text-[8px] font-mono tracking-wider text-cyan-400 font-bold bg-cyan-500/10 px-1 py-0.2 rounded border border-cyan-500/20">
-                  ▲ LOCAL
-                </span>
-              )}
             </div>
           </div>
         </div>
@@ -1765,10 +1809,11 @@ export default function App() {
                       <input 
                         type="text" 
                         placeholder="Ex: Agbozo"
-                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
                         value={authForm.name}
                         onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
                         required
+                        disabled={isAuthLoading}
                       />
                     </div>
                   )}
@@ -1780,10 +1825,11 @@ export default function App() {
                     <input 
                       type="email" 
                       placeholder="Ex: client@starbetpay.com"
-                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors"
+                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors disabled:opacity-50"
                       value={authForm.phone}
                       onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })}
                       required
+                      disabled={isAuthLoading}
                     />
                   </div>
 
@@ -1792,10 +1838,11 @@ export default function App() {
                     <input 
                       type="password" 
                       placeholder="••••••••"
-                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors"
+                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
                       value={authForm.password}
                       onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
                       required
+                      disabled={isAuthLoading}
                     />
                   </div>
 
@@ -1807,10 +1854,11 @@ export default function App() {
                       </div>
                       <input 
                         type="text" 
-                        placeholder="Ex: star_admin ou parrain@starbetpay.com"
-                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors"
+                        placeholder="Ex: STARXXXXXX ou parrain@starbetpay.com"
+                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors disabled:opacity-50"
                         value={authForm.parentPhone}
                         onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
+                        disabled={isAuthLoading}
                       />
                     </div>
                   )}
@@ -1831,9 +1879,17 @@ export default function App() {
 
                   <button 
                     type="submit"
-                    className="w-full bg-cyan-500 hover:bg-cyan-400 text-[#070e20] font-bold py-2.5 rounded-xl text-xs transition-colors shadow-lg shadow-cyan-500/15"
+                    disabled={isAuthLoading}
+                    className="w-full bg-cyan-500 hover:bg-cyan-400 text-[#070e20] font-bold py-2.5 rounded-xl text-xs transition-colors shadow-lg shadow-cyan-500/15 disabled:opacity-50 flex items-center justify-center gap-2 cursor-pointer"
                   >
-                    {authTab === 'login' ? 'Se connecter' : "S'inscrire"}
+                    {isAuthLoading ? (
+                      <>
+                        <span className="animate-spin text-sm">⏳</span>
+                        <span>{authTab === 'login' ? 'Connexion en cours...' : 'Inscription en cours...'}</span>
+                      </>
+                    ) : (
+                      <span>{authTab === 'login' ? 'Se connecter' : "S'inscrire"}</span>
+                    )}
                   </button>
                 </form>
 
@@ -2400,7 +2456,7 @@ export default function App() {
                                 <div className="text-lg font-mono font-black text-white mt-1">{rateOfCat}%</div>
                                 <span className="text-[8px] text-gray-500 block">Réussite</span>
                               </div>
-                              <span className="text-[8px] font-semibold text-gray-400 mt-2 font-mono bg-black/30 py-0.5 px-1.5 rounded text-center block w-full whitespace-nowrap">
+                              <span className="text-[7.5px] sm:text-[8px] font-semibold text-gray-400 mt-2 font-mono bg-black/30 py-1 px-1 rounded text-center block w-full leading-tight">
                                 {won} Gagnés / {total} Total
                               </span>
                             </div>
@@ -3570,6 +3626,7 @@ export default function App() {
                     }
                     try {
                       await dbService.deleteUser(phone);
+                      setAllUsers(prev => prev.filter(u => u.phone !== phone));
                       fetchAdminTransactions();
                       showToast(`Compte de ${name} supprimé avec succès ! 🗑️`, 'success');
                     } catch (e: any) {
@@ -4403,149 +4460,6 @@ export default function App() {
                 {/* 5. ADMINISTRATION: CONFIG SHEET CONTROLLER */}
                 {adminTab === 'config' && (
                   <div className="space-y-5 animate-fade-in relative">
-                    {/* Diagnostic & Synchro Card */}
-                    <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl relative overflow-hidden">
-                      <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
-                      <div className="flex justify-between items-center pb-2.5 border-b border-slate-800">
-                        <h4 className="text-xs font-extrabold font-display uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
-                          <span>⚙️</span>
-                          Base de données &amp; Synchronisation Cloud
-                        </h4>
-                        
-                        <div className="flex items-center gap-1.5">
-                          {isFirebaseConfigured ? (
-                            <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20 shadow-sm">
-                              ● CLOUD CONNECTÉ
-                            </span>
-                          ) : (
-                            <span className="text-[10px] font-mono font-bold text-amber-500 bg-amber-500/10 px-2.5 py-1 rounded-xl border border-amber-500/20 shadow-sm">
-                              ⚠️ MODE LOCAL ACTIF
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <p className="text-gray-300 text-[11px] leading-relaxed">
-                        StarBetPay utilise la puissance de <strong>Google Cloud Firebase Firestore</strong> pour stocker vos transactions, vos utilisateurs et vos configurations en temps réel. La base de données en nuage et l'authentification sécurisée sont synchronisées automatiquement.
-                      </p>
-
-                      {/* Configuration de Firebase Firestore */}
-                      <div className="bg-slate-950/25 p-4 rounded-2xl border border-slate-800/80 space-y-3">
-                        <div className="flex items-center gap-2 text-[11px] font-bold text-cyan-400">
-                          <span>🔥</span>
-                          <span>PROPRIÉTÉS DE LA BASE CLOUD FIREBASE</span>
-                        </div>
-                        <p className="text-gray-400 text-[10px] leading-relaxed">
-                          La connexion à Firebase est gérée directement par les identifiants sécurisés de votre espace de travail Google AI Studio. Voici les caractéristiques actives de votre déploiement de production en cours :
-                        </p>
-                        
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-[#070b19] p-3 rounded-xl border border-slate-900 text-xs">
-                          <div className="space-y-1">
-                            <span className="text-[10px] text-gray-500 font-bold block uppercase">Fournisseur de Service</span>
-                            <span className="text-white font-semibold flex items-center gap-1">🗺️ Google Cloud Platform</span>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[10px] text-gray-500 font-bold block uppercase">Module de Gestion</span>
-                            <span className="text-cyan-400 font-mono">Firebase Firestore (NoSQL)</span>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[10px] text-gray-500 font-bold block uppercase">Identifiant Firestore</span>
-                            <span className="text-white font-mono text-[10.5px]">ai-studio-6fa22465-f095-4e8a-be68-31fdc43b55f9</span>
-                          </div>
-                          <div className="space-y-1">
-                            <span className="text-[10px] text-gray-500 font-bold block uppercase">Fichier de Règles Actif</span>
-                            <span className="text-emerald-400 font-mono">firestore.rules (Hardened Auth v2)</span>
-                          </div>
-                        </div>
-
-                        {/* Forced strict production toggle option */}
-                        <div className="pt-2.5 border-t border-slate-800/60 flex items-center justify-between gap-4">
-                          <div className="space-y-0.5">
-                            <span className="text-[10px] text-cyan-400 font-bold uppercase tracking-wider block">🛡️ PRODUCTION STRICTE (SANS MODE SECOURS)</span>
-                            <p className="text-gray-400 text-[9px] leading-normal max-w-lg">
-                              Empêche le basculement automatique et silencieux en mode hors-ligne simulé lors des déconnexions réseau. Si la base de données Firestore est temporairement indisponible, l'application affichera un message d'attente officiel.
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const nextVal = !isForceFirebase;
-                              setIsForceFirebase(nextVal);
-                              setForceFirebaseProduction(nextVal);
-                              showToast(nextVal ? "Production stricte active ! (Zéro basculement local)" : "Mode secours local passif réactivé.", "info");
-                            }}
-                            className={`w-10 h-5.5 rounded-full p-0.5 transition-colors relative flex items-center flex-shrink-0 cursor-pointer ${isForceFirebase ? 'bg-[#06b6d4]' : 'bg-slate-800'}`}
-                          >
-                            <div className={`w-4.5 h-4.5 rounded-full bg-slate-950 transition-all shadow-md ${isForceFirebase ? 'translate-x-4.5' : 'translate-x-0'}`} />
-                          </button>
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-950/40 p-3 rounded-2xl border border-slate-800/80 space-y-3 font-sans">
-                        <div className="flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
-                          <div>
-                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Statut du Service Cloud</span>
-                            <span className="text-[11px] text-gray-300">Vérifier l'état et la réactivité du serveur Firestore.</span>
-                          </div>
-                          
-                          <button
-                            type="button"
-                            onClick={handleCheckAndForceCloud}
-                            disabled={isCheckingCloud}
-                            className="w-full sm:w-auto px-3 py-2 bg-emerald-500 hover:bg-emerald-450 text-slate-950 rounded-xl text-[10px] font-black disabled:bg-slate-800 disabled:text-gray-500 cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/10"
-                          >
-                            {isCheckingCloud ? (
-                              <>
-                                <span className="animate-spin text-xs">⏳</span>
-                                <span>Vérification...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span>🔌</span>
-                                <span>Tester la Connexion Cloud</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-
-                        <div className="pt-3 border-t border-slate-900 flex flex-col sm:flex-row gap-2 justify-between items-start sm:items-center">
-                          <div>
-                            <span className="text-[10px] text-gray-400 font-bold uppercase tracking-wider block">Générer &amp; Réinitialiser</span>
-                            <span className="text-[11px] text-gray-300">Remplir le Cloud ou restaurer les données de démonstration de base (Données de test Agbozo, etc.).</span>
-                          </div>
-                          
-                          <button
-                            type="button"
-                            onClick={handleSyncCloudData}
-                            disabled={isSyncingCloud}
-                            className="w-full sm:w-auto px-3 py-2 bg-[#00f0ff] hover:bg-[#00d0dd] text-slate-950 rounded-xl text-[10px] font-black disabled:bg-[#111a33] disabled:text-gray-500 cursor-pointer transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-cyan-500/10"
-                          >
-                            {isSyncingCloud ? (
-                              <>
-                                <span className="animate-spin text-xs">⚡</span>
-                                <span>Synchronisation...</span>
-                              </>
-                            ) : (
-                              <>
-                                <span>📤</span>
-                                <span>Restaurer les données test</span>
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </div>
-
-                      {cloudErrorDetails && (
-                        <div className="p-3 bg-[#3f0f15]/30 border border-red-500/20 rounded-2xl text-[10px] font-mono text-red-400 leading-normal overflow-x-auto">
-                          <strong>Erreur de diagnostic :</strong>
-                          <div className="mt-1">{cloudErrorDetails}</div>
-                          <div className="mt-1.5 text-gray-400 font-sans text-[10.5px]">
-                            Veuillez vous assurer que votre base Firebase Firestore est active et que vos règles de sécurité firestore.rules sont correctement déployées.
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                    
                     {/* Public Banner Form */}
                     <form onSubmit={handleUpdateConfig} className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl">
                       <div className="flex justify-between items-center pb-2.5 border-b border-slate-800">
