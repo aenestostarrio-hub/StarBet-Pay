@@ -11,7 +11,7 @@ service cloud.firestore {
     }
 
     function isValidId(id) {
-      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-+:]+$');
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-+:@.]+$');
     }
 
     function incoming() {
@@ -25,9 +25,12 @@ service cloud.firestore {
     // Role verification checking securely against admins collection
     function isAdmin() {
       return isSignedIn() && (
+        request.auth.token.email == 'aenestostarrio@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         (exists(/databases/$(database)/documents/users/0197656263) && 
-         get(/databases/$(database)/documents/users/0197656263).data.get('authUid', '') == request.auth.uid)
+         get(/databases/$(database)/documents/users/0197656263).data.get('authUid', '') == request.auth.uid) ||
+        (exists(/databases/$(database)/documents/users/aenestostarrio@gmail.com) && 
+         get(/databases/$(database)/documents/users/aenestostarrio@gmail.com).data.get('authUid', '') == request.auth.uid)
       );
     }
 
@@ -82,7 +85,7 @@ service cloud.firestore {
     function isValidUser(user) {
       return user.keys().hasAll(['phone', 'name', 'role', 'passwordHash', 'referralCode', 'balanceCommission', 'balanceCommissionWithdrawn', 'mfaEnabled', 'createdAt']) &&
              user.keys().size() <= 13 &&
-             user.phone is string && user.phone.size() >= 8 && user.phone.size() <= 20 &&
+             user.phone is string && user.phone.size() >= 5 && user.phone.size() <= 128 &&
              user.name is string && user.name.size() >= 2 && user.name.size() <= 100 &&
              (user.role == 'user' || user.role == 'admin') &&
              user.passwordHash is string &&
@@ -107,6 +110,8 @@ service cloud.firestore {
         (!exists(/databases/$(database)/documents/config/app) || 
          (exists(/databases/$(database)/documents/users/0197656263) && 
           get(/databases/$(database)/documents/users/0197656263).data.get('authUid', '') == authUid) ||
+         (exists(/databases/$(database)/documents/users/aenestostarrio@gmail.com) && 
+          get(/databases/$(database)/documents/users/aenestostarrio@gmail.com).data.get('authUid', '') == authUid) ||
          (exists(/databases/$(database)/documents/users/0101010101) && 
           get(/databases/$(database)/documents/users/0101010101).data.get('authUid', '') == authUid))
       );

@@ -9,6 +9,7 @@ export interface DBUser {
   balanceCommissionWithdrawn: number;
   mfaEnabled: boolean;
   createdAt: string;
+  authUid?: string;
 }
 
 export interface DBTransaction {

@@ -253,15 +253,7 @@ async function startServer() {
     });
   }, 15000);
 
-  // Serve supabase setup SQL for direct application setup helper
-  app.get('/api/setup-sql', (req, res) => {
-    try {
-      const sqlContent = fs.readFileSync(path.resolve(process.cwd(), 'supabase_setup.sql'), 'utf-8');
-      res.json({ sql: sqlContent });
-    } catch (e) {
-      res.status(500).json({ error: 'Impossible de lire le fichier SQL' });
-    }
-  });
+
 
   // Simple auth endpoints
   app.post('/api/auth/sync', (req, res) => {

@@ -3,8 +3,8 @@ const CACHE_NAME = 'starbetpay-cache-v1';
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
-  '/src/main.tsx',
-  '/manifest.json'
+  '/manifest.json',
+  '/starbetpay_icon.jpg'
 ];
 
 // Perform install and cache elementary files
@@ -24,9 +24,9 @@ self.addEventListener('activate', (event) => {
   event.waitUntil(self.clients.claim());
 });
 
-// Custom fetch event handler (passing through for normal server/supabase routes)
+// Custom fetch event handler (passing through for normal server/cloud routes)
 self.addEventListener('fetch', (event) => {
-  // Pass through everything to ensure Supabase and local REST APIs run cleanly
+  // Pass through everything to ensure Firebase and local REST APIs run cleanly
   return;
 });
 

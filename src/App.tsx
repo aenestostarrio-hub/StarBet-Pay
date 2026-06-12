@@ -9,7 +9,7 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { onSnapshot, collection, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
-import { dbService, db, auth, isSupabaseConfigured, setSupabaseConfigured, useLocalStorageSandbox, updateSupabaseConfig, supabaseUrl, supabaseAnonKey, forceSupabaseProduction, setForceSupabaseProduction } from './lib/supabase';
+import { dbService, db, auth, isFirebaseConfigured, setFirebaseConfigured, useLocalStorageSandbox, forceFirebaseProduction, setForceFirebaseProduction, setFirebaseFallbackOccurred } from './lib/firebase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
 
@@ -96,6 +96,15 @@ function playChimeNotification() {
   }
 }
 
+function safeConfirm(message: string): boolean {
+  try {
+    return window.confirm(message);
+  } catch (e) {
+    console.warn('[StarBetPay] window.confirm blocked inside sandboxed iframe workspace, auto-confirming action.', e);
+    return true;
+  }
+}
+
 export default function App() {
   // Session & Auth state
   const [user, setUser] = useState<Omit<DBUser, 'passwordHash'>>(() => {
@@ -116,8 +125,8 @@ export default function App() {
   });
   const [authError, setAuthError] = useState('');
   const [authSuccess, setAuthSuccess] = useState('');
-  const [supabaseSetupNeeded, setSupabaseSetupNeeded] = useState(false);
-  const [isForceSupabase, setIsForceSupabase] = useState(forceSupabaseProduction);
+  const [firebaseSetupNeeded, setFirebaseSetupNeeded] = useState(false);
+  const [isForceFirebase, setIsForceFirebase] = useState(forceFirebaseProduction);
   const [isSyncingCloud, setIsSyncingCloud] = useState(false);
   const [copiedText, setCopiedText] = useState<string | null>(null);
   const [showDemoHelper, setShowDemoHelper] = useState(false);
@@ -125,8 +134,8 @@ export default function App() {
   const handleSyncCloudData = async () => {
     setIsSyncingCloud(true);
     try {
-      if ((dbService as any).seedSupabaseFromLocal) {
-        const result = await (dbService as any).seedSupabaseFromLocal();
+      if ((dbService as any).seedFirebaseFromLocal) {
+        const result = await (dbService as any).seedFirebaseFromLocal();
         showToast(result.message, 'success');
         // Refresh everything
         await fetchAdminTransactions();
@@ -136,7 +145,7 @@ export default function App() {
       }
     } catch (err: any) {
       console.error(err);
-      showToast(err.message || "Échec de la synchronisation vers Supabase", 'error');
+      showToast(err.message || "Échec de la synchronisation vers Firebase", 'error');
     } finally {
       setIsSyncingCloud(false);
     }
@@ -144,44 +153,36 @@ export default function App() {
 
   const [isCheckingCloud, setIsCheckingCloud] = useState(false);
   const [cloudErrorDetails, setCloudErrorDetails] = useState<string | null>(null);
-  const [credUrl, setCredUrl] = useState(supabaseUrl || '');
-  const [credAnonKey, setCredAnonKey] = useState(supabaseAnonKey || '');
 
-  const handleCheckAndForceCloud = async (urlInput?: any, keyInput?: any) => {
+  const handleCheckAndForceCloud = async () => {
     setIsCheckingCloud(true);
     setCloudErrorDetails(null);
     try {
-      const urlToUse = (typeof urlInput === 'string') ? urlInput : credUrl;
-      const keyToUse = (typeof keyInput === 'string') ? keyInput : credAnonKey;
-
-      // Update configurations
-      updateSupabaseConfig((urlToUse || '').trim(), (keyToUse || '').trim());
-
-      if (!(dbService as any).checkSupabaseConnection) {
+      if (!(dbService as any).checkFirebaseConnection) {
         showToast("Service de diagnostique indisponible.", "error");
         return;
       }
 
-      setSupabaseConfigured(true); // Temporarily turn it back on to test
-      const check = await (dbService as any).checkSupabaseConnection();
+      setFirebaseConfigured(true); // Temporarily turn it back on to test
+      const check = await (dbService as any).checkFirebaseConnection();
       
       if (check.success) {
-        setSupabaseConfigured(true);
-        setSupabaseSetupNeeded(false);
-        showToast("Connexion Cloud Supabase opérationnelle ! 🎉", "success");
+        setFirebaseConfigured(true);
+        setFirebaseSetupNeeded(false);
+        showToast("Connexion Cloud Firebase Firestore opérationnelle ! 🎉", "success");
         // Reload data
         await fetchAppConfigAndData();
         await fetchAdminTransactions();
       } else {
-        setSupabaseConfigured(false);
-        setSupabaseSetupNeeded(true);
-        const errorMsg = check.error || "Certaines tables n'ont pas encore été créées.";
+        setFirebaseConfigured(false);
+        setFirebaseSetupNeeded(true);
+        const errorMsg = check.error || "La collection config n'as pas pû être trouvée.";
         setCloudErrorDetails(errorMsg);
-        showToast("Échec de connexion au Cloud. Des tables sont manquantes ou incorrectes.", "error");
+        showToast("Échec de connexion au Cloud Firebase. La base de données est indisponible.", "error");
       }
     } catch (e: any) {
-      setSupabaseConfigured(false);
-      setSupabaseSetupNeeded(true);
+      setFirebaseConfigured(false);
+      setFirebaseSetupNeeded(true);
       setCloudErrorDetails(e.message || String(e));
       showToast("Erreur lors du test de connexion.", "error");
     } finally {
@@ -317,38 +318,7 @@ export default function App() {
     setInAppNotifications(prev => [newNotif, ...prev]);
   };
 
-  const [copiedSql, setCopiedSql] = useState(false);
-  const handleCopySQL = async () => {
-    try {
-      const res = await fetch('/api/setup-sql');
-      if (!res.ok) {
-        throw new Error("HTTP error " + res.status);
-      }
-      const data = await res.json();
-      if (data && data.sql) {
-        const performCopy = () => {
-          setCopiedSql(true);
-          showToast("Script SQL copié ! Collez-le dans l'éditeur SQL de votre projet Supabase.", 'success');
-          setTimeout(() => setCopiedSql(false), 5000);
-        };
 
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          try {
-            await navigator.clipboard.writeText(data.sql);
-            performCopy();
-          } catch (err) {
-            fallbackCopyText(data.sql, performCopy);
-          }
-        } else {
-          fallbackCopyText(data.sql, performCopy);
-        }
-      } else {
-        showToast("Erreur : impossible de lire le script SQL d'initialisation.", 'error');
-      }
-    } catch (e) {
-      showToast('Erreur lors de la récupération ou de la copie du script SQL.', 'error');
-    }
-  };
 
   const [notificationPermission, setNotificationPermission] = useState<string>(() => {
     try {
@@ -551,11 +521,9 @@ export default function App() {
 
   // Initialize general app configs
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      (window as any).onSupabaseFallbackOccurred = () => {
-        setSupabaseSetupNeeded(true);
-      };
-    }
+    setFirebaseFallbackOccurred(() => {
+      setFirebaseSetupNeeded(true);
+    });
 
     fetchAppConfigAndData();
     
@@ -1056,7 +1024,12 @@ export default function App() {
   };
 
   // Action: Log Out
-  const handleLogout = () => {
+  const handleLogout = async () => {
+    try {
+      await auth.signOut();
+    } catch (e) {
+      console.warn("Error signing out from Firebase Auth:", e);
+    }
     localStorage.removeItem('starbetpay_user');
     setUser(null);
     setIsAdminMode(false);
@@ -1425,7 +1398,7 @@ export default function App() {
       showToast("Sélectionnez d'abord un coupon", "warning");
       return;
     }
-    if (!window.confirm("Voulez-vous vraiment mettre à jour le statut de ce coupon ?")) {
+    if (!safeConfirm("Voulez-vous vraiment mettre à jour le statut de ce coupon ?")) {
       return;
     }
     setFormLoading(true);
@@ -1445,7 +1418,7 @@ export default function App() {
 
   // Action: Delete a single history item
   const handleDeleteHistoryItem = async (historyId: string) => {
-    if (!window.confirm("Voulez-vous supprimer cette entrée de l'historique ?")) {
+    if (!safeConfirm("Voulez-vous supprimer cette entrée de l'historique ?")) {
       return;
     }
     try {
@@ -1453,13 +1426,13 @@ export default function App() {
       setPastCoupons(historyData);
     } catch (e: any) {
       console.warn(e);
-      alert(e.message || "Erreur lors de la suppression.");
+      showToast(e.message || "Erreur lors de la suppression.", "error");
     }
   };
 
   // Action: Clear all Coupon History Items
   const handleClearHistory = async () => {
-    if (!window.confirm("Voulez-vous vraiment réinitialiser TOUT l'historique des coupons ?")) {
+    if (!safeConfirm("Voulez-vous vraiment réinitialiser TOUT l'historique des coupons ?")) {
       return;
     }
     try {
@@ -1581,7 +1554,7 @@ export default function App() {
             <h1 className="text-base font-extrabold font-display tracking-tight bg-gradient-to-r from-cyan-400 to-blue-400 bg-clip-text text-transparent">StarBetPay</h1>
             <div className="flex items-center gap-1.5 flex-wrap">
               <span className="text-[10px] text-gray-400 font-medium font-mono uppercase tracking-widest">1XBET • DÉPÔT & RETRAIT</span>
-              {isSupabaseConfigured ? (
+              {isFirebaseConfigured ? (
                 <span className="text-[8px] font-mono tracking-wider text-emerald-400 font-bold bg-emerald-500/10 px-1 py-0.2 rounded border border-emerald-500/20">
                   ● CLOUD
                 </span>
@@ -1801,11 +1774,13 @@ export default function App() {
                   )}
 
                   <div>
-                    <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-1">Téléphone</label>
+                    <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-1">
+                      Adresse E-mail
+                    </label>
                     <input 
-                      type="tel" 
-                      placeholder="Ex: 97 00 00 00"
-                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono transition-colors"
+                      type="email" 
+                      placeholder="Ex: client@starbetpay.com"
+                      className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors"
                       value={authForm.phone}
                       onChange={(e) => setAuthForm({ ...authForm, phone: e.target.value })}
                       required
@@ -1827,13 +1802,13 @@ export default function App() {
                   {authTab === 'register' && (
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold">Téléphone Parrain (Facultatif)</label>
+                        <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold">Code ou E-mail du Parrain (Facultatif)</label>
                         <span className="text-[10px] text-cyan-400 font-mono font-bold">Bonus 1%</span>
                       </div>
                       <input 
-                        type="tel" 
-                        placeholder="Ex: 0197656263"
-                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-mono transition-colors"
+                        type="text" 
+                        placeholder="Ex: star_admin ou parrain@starbetpay.com"
+                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors"
                         value={authForm.parentPhone}
                         onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
                       />
@@ -1930,7 +1905,7 @@ export default function App() {
           <div>
             
             {/* Firebase incomplete setup fallback notice banner */}
-            {supabaseSetupNeeded && (
+            {firebaseSetupNeeded && (
               <div className="bg-amber-500/10 border border-amber-500/20 rounded-2xl p-4 mb-5 shadow-lg flex flex-col md:flex-row gap-4 items-start md:items-center justify-between text-xs text-amber-300 animate-fade-in font-sans">
                 <div className="flex gap-3">
                   <span className="text-xl shrink-0">⚠️</span>
@@ -1976,7 +1951,7 @@ export default function App() {
                   </div>
                 </div>
                 <button 
-                  onClick={() => setSupabaseSetupNeeded(false)} 
+                  onClick={() => setFirebaseSetupNeeded(false)} 
                   className="px-3 py-2 bg-amber-500/20 hover:bg-amber-500/30 active:bg-amber-500/40 border border-amber-500/20 rounded-xl text-[10px] font-bold text-amber-200 shrink-0 self-end md:self-center cursor-pointer transition-colors shadow"
                 >
                   OK, Compris
@@ -2114,11 +2089,11 @@ export default function App() {
                         <div>
                           <p className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Lien de parrainage</p>
                           <button
-                            onClick={() => handleCopyToClipboard(`${window.location.origin}/?ref=${user.phone}`)}
+                            onClick={() => handleCopyToClipboard(`${window.location.origin}/?ref=${user.referralCode || user.phone}`)}
                             className="bg-slate-950 text-cyan-400 hover:text-white border border-slate-800 text-[10px] px-2 py-0.5 rounded mt-1.5 flex items-center gap-1 font-semibold text-center w-full"
                           >
                             <Copy size={10} />
-                            Code: {user.phone}
+                            Code: {user.referralCode || user.phone}
                           </button>
                         </div>
                       </div>
@@ -3407,7 +3382,7 @@ export default function App() {
                   const sponsorWithdrawnTotal = allUsers.reduce((sum, u) => sum + (u.balanceCommissionWithdrawn || 0), 0);
                   const sponsorAccumulatedTotal = sponsorBalanceTotal + sponsorWithdrawnTotal;
 
-                  const isCloudActive = isSupabaseConfigured;
+                  const isCloudActive = isFirebaseConfigured;
                   const isEmptyCloudDb = isCloudActive && totalUsersCount <= 1 && depositCount === 0;
 
                   return (
@@ -3590,7 +3565,7 @@ export default function App() {
                   });
 
                   const handleDeleteUserClick = async (phone: string, name: string) => {
-                    if (!window.confirm(`⚠️ ATTENTION ! Voulez-vous vraiment supprimer définitivement le compte de ${name} (${phone}) ? Cette action est irréversible.`)) {
+                    if (!safeConfirm(`⚠️ ATTENTION ! Voulez-vous vraiment supprimer définitivement le compte de ${name} (${phone}) ? Cette action est irréversible.`)) {
                       return;
                     }
                     try {
@@ -3598,7 +3573,7 @@ export default function App() {
                       fetchAdminTransactions();
                       showToast(`Compte de ${name} supprimé avec succès ! 🗑️`, 'success');
                     } catch (e: any) {
-                      showToast("Erreur lors de la suppression de l'utilisateur.", 'error');
+                      showToast(`Erreur lors de la suppression de l'utilisateur: ${e.message || String(e)}`, 'error');
                     }
                   };
 
@@ -3608,7 +3583,7 @@ export default function App() {
                       ? `Voulez-vous vraiment promouvoir ${name} (${phone}) au rang d'Administrateur ? Il aura un accès complet au panneau de contrôle.`
                       : `Voulez-vous vraiment retirer les droits d'administration de ${name} (${phone}) ?`;
                     
-                    if (!window.confirm(confirmMsg)) {
+                    if (!safeConfirm(confirmMsg)) {
                       return;
                     }
                     try {
@@ -3814,7 +3789,7 @@ export default function App() {
                                     <button
                                       type="button"
                                       onClick={async () => {
-                                        if (window.confirm(`Voulez-vous vraiment dépublier le coupon "${choice.name}" ? Tous ses matchs en cours seront vidés.`)) {
+                                        if (safeConfirm(`Voulez-vous vraiment dépublier le coupon "${choice.name}" ? Tous ses matchs en cours seront vidés.`)) {
                                           try {
                                             const updatedCoupons = await dbService.updateCoupon({
                                               id: choice.id,
@@ -4438,7 +4413,7 @@ export default function App() {
                         </h4>
                         
                         <div className="flex items-center gap-1.5">
-                          {isSupabaseConfigured ? (
+                          {isFirebaseConfigured ? (
                             <span className="text-[10px] font-mono font-bold text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-xl border border-emerald-500/20 shadow-sm">
                               ● CLOUD CONNECTÉ
                             </span>
@@ -4494,14 +4469,14 @@ export default function App() {
                           <button
                             type="button"
                             onClick={() => {
-                              const nextVal = !isForceSupabase;
-                              setIsForceSupabase(nextVal);
-                              setForceSupabaseProduction(nextVal);
+                              const nextVal = !isForceFirebase;
+                              setIsForceFirebase(nextVal);
+                              setForceFirebaseProduction(nextVal);
                               showToast(nextVal ? "Production stricte active ! (Zéro basculement local)" : "Mode secours local passif réactivé.", "info");
                             }}
-                            className={`w-10 h-5.5 rounded-full p-0.5 transition-colors relative flex items-center flex-shrink-0 cursor-pointer ${isForceSupabase ? 'bg-[#06b6d4]' : 'bg-slate-800'}`}
+                            className={`w-10 h-5.5 rounded-full p-0.5 transition-colors relative flex items-center flex-shrink-0 cursor-pointer ${isForceFirebase ? 'bg-[#06b6d4]' : 'bg-slate-800'}`}
                           >
-                            <div className={`w-4.5 h-4.5 rounded-full bg-slate-950 transition-all shadow-md ${isForceSupabase ? 'translate-x-4.5' : 'translate-x-0'}`} />
+                            <div className={`w-4.5 h-4.5 rounded-full bg-slate-950 transition-all shadow-md ${isForceFirebase ? 'translate-x-4.5' : 'translate-x-0'}`} />
                           </button>
                         </div>
                       </div>

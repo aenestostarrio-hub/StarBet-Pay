@@ -4,6 +4,18 @@
   "description": "StarBetPay est une solution ultra-rapide et ultra-sécurisée de dépôts et de retraits pour votre compte 1XBET avec authentification multifacteur (MFA).",
   "icons": [
     {
+      "src": "/starbetpay_icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "192x192",
+      "purpose": "any"
+    },
+    {
+      "src": "/starbetpay_icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    },
+    {
       "src": "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
       "type": "image/png",
       "sizes": "192x192",

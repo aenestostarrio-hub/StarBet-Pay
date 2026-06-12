@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
 import { 
   initializeFirestore, doc, getDoc, getDocs, setDoc as originalSetDoc, updateDoc as originalUpdateDoc, 
   collection, query, where, orderBy, getDocFromServer, deleteDoc 
@@ -52,10 +52,8 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
-// Sign in anonymously on boot to satisfy rules_version = '2' security policies safely
-signInAnonymously(auth).catch(err => {
-  console.warn("[Firebase Auth] Anonymous sign-in failed. Working in guest mode.", err);
-});
+// [Firebase Migration] Anonymous auto-signin disabled. Sessions are now persisted via robust Email/Password authentication.
+// Guests are now treated as unauthenticated sessions with public read-only access where permitted by rules.
 
 // Auto-sync user credentials and elevate to /admins when Auth session successfully resolves
 if (typeof window !== 'undefined') {
@@ -162,22 +160,23 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Map old Supabase configuration states to keep React's App.tsx compiling perfectly
-export let isSupabaseConfigured = true;
-export function setSupabaseConfigured(val: boolean) {
-  isSupabaseConfigured = val;
+// Google Cloud Firebase configuration state variables
+export let isFirebaseConfigured = true;
+export function setFirebaseConfigured(val: boolean) {
+  isFirebaseConfigured = val;
 }
-export let forceSupabaseProduction = true;
-export function setForceSupabaseProduction(val: boolean) {
-  forceSupabaseProduction = val;
+export let forceFirebaseProduction = true;
+export function setForceFirebaseProduction(val: boolean) {
+  forceFirebaseProduction = val;
 }
 export let useLocalStorageSandbox = false;
-export let supabaseUrl = 'firebase-firestore-active';
-export let supabaseAnonKey = 'firebase-firestore-active';
-export function updateSupabaseConfig(url: string, key: string) {
-  // Configured statically via firebase-applet-config.json
+export let onFirebaseFallbackOccurred: (() => void) | null = null;
+export function setFirebaseFallbackOccurred(val: (() => void) | null) {
+  onFirebaseFallbackOccurred = val;
 }
-export let onSupabaseFallbackOccurred: (() => void) | null = null;
+export const onSupabaseFallbackOccurred = () => {
+  if (onFirebaseFallbackOccurred) onFirebaseFallbackOccurred();
+};
 
 // Initial Local seeding state fallback
 const LOCAL_DB_KEY = 'starbetpay_local_db';
@@ -324,7 +323,7 @@ async function testConnection() {
     if (!firebaseConfig.projectId || firebaseConfig.projectId.includes("YOUR-")) {
       console.warn("[Firebase Native] Switching silently to Local Storage Sandbox fallback mode because Firebase is unconfigured.");
       useLocalStorageSandbox = true;
-      onSupabaseFallbackOccurred?.();
+      onFirebaseFallbackOccurred?.();
     } else {
       console.warn("[Firebase Native] Connection warning detected, but keeping Cloud Firestore active as it has built-in offline resiliency.");
     }
@@ -739,11 +738,35 @@ export const dbService = {
       const docRef = doc(db, 'users', phone);
       const docSnap = await getDoc(docRef);
       if (docSnap.exists()) {
-        throw new Error('Un utilisateur avec ce numéro existe déjà.');
+        throw new Error('Un utilisateur avec cette adresse e-mail existe déjà.');
       }
 
-      // Check if code was mapped
-      let cleanParentPhone = parentPhone ? parentPhone.trim() : undefined;
+      // Check if sponsor's referral code or ID is mapped to parent document ID
+      let cleanParentPhone: string | undefined = undefined;
+      if (parentPhone) {
+        const trimmedCode = parentPhone.trim();
+        try {
+          const usersCol = collection(db, 'users');
+          const q = query(usersCol, where('referralCode', '==', trimmedCode));
+          const qSnap = await getDocs(q);
+          if (!qSnap.empty) {
+            cleanParentPhone = qSnap.docs[0].id; // resolved email/phone of parent
+          } else {
+            // Check if they entered the parent's actual email of the document ID
+            const directDoc = await getDoc(doc(db, 'users', trimmedCode));
+            if (directDoc.exists()) {
+              cleanParentPhone = trimmedCode;
+            }
+          }
+        } catch (err) {
+          console.warn("[Register Sponsor Lookup] Error looking up sponsor by referral code:", err);
+        }
+      }
+
+      // Generate a polished unique referral code derived from email username
+      const usernamePrefix = phone.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
+      const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+      const referralCode = `star_${usernamePrefix}_${randomSuffix}`;
       
       const newUser: DBUser = {
         phone,
@@ -751,14 +774,27 @@ export const dbService = {
         role: 'user',
         passwordHash,
         parentPhone: cleanParentPhone || undefined,
-        referralCode: `star_${phone.substring(phone.length - 4)}`,
+        referralCode,
         balanceCommission: 0,
         balanceCommissionWithdrawn: 0,
         mfaEnabled: false,
         createdAt: new Date().toISOString()
       };
 
-      const authUid = auth.currentUser?.uid;
+      // [Firebase Migration] Robust Email/Password Authentication registration
+      const email = phone.trim();
+      let authUid = '';
+      try {
+        const cred = await createUserWithEmailAndPassword(auth, email, passwordHash);
+        authUid = cred.user.uid;
+      } catch (authErr: any) {
+        console.error("[Firebase Register] Auth creation failed:", authErr);
+        if (authErr && (authErr.code === 'auth/email-already-in-use' || authErr.message?.includes('already-in-use'))) {
+          throw new Error("Un compte d'authentification existe déjà pour cette adresse e-mail.");
+        }
+        throw new Error(authErr.message || "Erreur lors de la création du compte d'authentification.");
+      }
+
       if (authUid) {
         (newUser as any).authUid = authUid;
       }
@@ -771,15 +807,29 @@ export const dbService = {
         onSupabaseFallbackOccurred?.();
         const ldb = getLocalDB();
         if (ldb.users[phone]) {
-          throw new Error('Un utilisateur avec ce numéro existe déjà.');
+          throw new Error('Un utilisateur avec cette adresse e-mail existe déjà.');
         }
+
+        let cleanParentPhone: string | undefined = undefined;
+        if (parentPhone) {
+          const trimmedCode = parentPhone.trim();
+          const foundParent = Object.values(ldb.users).find(u => u.referralCode === trimmedCode || u.phone === trimmedCode);
+          if (foundParent) {
+            cleanParentPhone = foundParent.phone;
+          }
+        }
+
+        const usernamePrefix = phone.split('@')[0].replace(/[^a-zA-Z0-9]/g, '');
+        const randomSuffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+        const referralCode = `star_${usernamePrefix}_${randomSuffix}`;
+
         const newUser: DBUser = {
           phone,
           name,
           role: 'user',
           passwordHash,
-          parentPhone: parentPhone || undefined,
-          referralCode: `star_${phone.substring(phone.length - 4)}`,
+          parentPhone: cleanParentPhone || undefined,
+          referralCode,
           balanceCommission: 0,
           balanceCommissionWithdrawn: 0,
           mfaEnabled: false,
@@ -793,105 +843,144 @@ export const dbService = {
     }
   },
 
-  async login(phone: string, passwordHash: string): Promise<{ tempUser: Partial<DBUser> }> {
+  async login(phoneOrEmail: string, passwordHash: string): Promise<{ tempUser: Partial<DBUser> }> {
     try {
       if (useLocalStorageSandbox) throw new Error('forced offline');
-      const docRef = doc(db, 'users', phone);
-      const docSnap = await getDoc(docRef);
 
-      // Auto-creation on-the-fly for demo admin and sandbox users
-      if (!docSnap.exists()) {
-        if (phone === '0197656263' || phone === '0161616161') {
-          const isDemoAdmin = phone === '0197656263';
-          const seededUser: DBUser = {
-            phone,
-            name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
-            role: isDemoAdmin ? 'admin' : 'user',
-            passwordHash: passwordHash, // Dynamic hash entry match
-            referralCode: isDemoAdmin ? 'star_admin' : 'star_agbozo',
-            balanceCommission: isDemoAdmin ? 0 : 4500,
-            balanceCommissionWithdrawn: isDemoAdmin ? 0 : 1000,
-            mfaEnabled: false,
-            parentPhone: isDemoAdmin ? undefined : '0197656263',
-            createdAt: new Date().toISOString()
-          };
-          
-          let authUid = auth.currentUser?.uid;
-          if (!authUid) {
-            console.log("[Firebase Login Auto-Creation] Custom authentication state empty, signing in anonymously on the fly...");
-            try {
-              const cred = await signInAnonymously(auth);
+      let email = '';
+      let phoneStr = '';
+      if (phoneOrEmail.includes('@')) {
+        email = phoneOrEmail.trim().toLowerCase();
+        if (email === 'aenestostarrio@gmail.com') {
+          phoneStr = '0197656263';
+        } else {
+          phoneStr = email;
+        }
+      } else {
+        phoneStr = phoneOrEmail.trim();
+        if (phoneStr === '0197656263') {
+          email = 'aenestostarrio@gmail.com';
+        } else {
+          email = `${phoneStr}@starbetpay.com`;
+        }
+      }
+
+      const docRef = doc(db, 'users', phoneStr);
+      let docSnap = await getDoc(docRef);
+
+      let authUid = '';
+
+      // 1. Attempt to log in with Firebase Authentication
+      try {
+        const cred = await signInWithEmailAndPassword(auth, email, passwordHash);
+        authUid = cred.user.uid;
+      } catch (authErr: any) {
+        console.log("[Firebase Login] Email/Password direct sign-in failed, checking auto-migration or demo credentials. Error code:", authErr?.code);
+        
+        // If the user document doesn't exist in Firestore, is it a demo account that needs seeding?
+        if (!docSnap.exists() && (phoneStr === '0197656263' || phoneStr === '0161616161')) {
+          try {
+            const cred = await createUserWithEmailAndPassword(auth, email, passwordHash);
+            authUid = cred.user.uid;
+          } catch (createErr: any) {
+            if (createErr.code === 'auth/email-already-in-use' || createErr.message?.includes('already-in-use')) {
+              const cred = await signInWithEmailAndPassword(auth, email, passwordHash);
               authUid = cred.user.uid;
-            } catch (authErr: any) {
-              console.error("[Firebase Login Auto-Creation] Anonymous sign-in failed during login auto-creation.", authErr);
-              if (authErr?.code === 'auth/admin-restricted-operation' || authErr?.message?.includes('admin-restricted-operation')) {
-                throw new Error("L'authentification anonyme est désactivée dans votre console Firebase. Activez-la sous Authentication -> Mode de connexion -> Anonyme.");
-              }
-              throw authErr;
+            } else {
+              throw createErr;
             }
           }
-          if (authUid) {
-            (seededUser as any).authUid = authUid;
-          }
-          await setDoc(docRef, seededUser);
+        } else if (docSnap.exists()) {
+          // User exists in Firestore but couldn't sign in via Auth. 
+          // Check if password hashes match to transparently migrate them to Firebase Auth
+          const existingUser = docSnap.data() as DBUser;
+          const defaultAdminPass = 'Azertyui0p';
+          const defaultUserPass = 'Password123';
           
-          if (isDemoAdmin && authUid) {
-            await setDoc(doc(db, 'admins', authUid), { active: true });
+          let isDefaultMatch = false;
+          if (phoneStr === '0197656263' && passwordHash === defaultAdminPass) {
+            isDefaultMatch = true;
+          } else if (phoneStr === '0161616161' && passwordHash === defaultUserPass) {
+            isDefaultMatch = true;
           }
 
-          return { tempUser: seededUser };
-        }
-        throw new Error('Numéro de téléphone ou mot de passe incorrect.');
-      }
-
-      const user = docSnap.data() as DBUser;
-      
-      // Auto-realign demo passwords if they are logging in with standard demo credentials
-      const defaultAdminPass = 'Azertyui0p';
-      const defaultUserPass = 'Password123';
-      
-      let isDefaultMatch = false;
-      if (phone === '0197656263' && passwordHash === defaultAdminPass) {
-        isDefaultMatch = true;
-      } else if (phone === '0161616161' && passwordHash === defaultUserPass) {
-        isDefaultMatch = true;
-      }
-
-      if (user.passwordHash !== passwordHash) {
-        if (isDefaultMatch) {
-          user.passwordHash = passwordHash;
-          await updateDoc(docRef, { passwordHash });
+          if (existingUser.passwordHash === passwordHash || isDefaultMatch) {
+            // Password is correct! Let's auto-provision the user in Firebase Auth
+            try {
+              console.log("[Firebase Login Auto-Migration] Creating Firebase Auth credential on typical login for:", email);
+              const cred = await createUserWithEmailAndPassword(auth, email, passwordHash);
+              authUid = cred.user.uid;
+            } catch (createErr: any) {
+              if (createErr.code === 'auth/email-already-in-use' || createErr.message?.includes('already-in-use')) {
+                try {
+                  const cred = await signInWithEmailAndPassword(auth, email, passwordHash);
+                  authUid = cred.user.uid;
+                } catch {
+                  throw new Error('Identifiant ou mot de passe incorrect.');
+                }
+              } else {
+                throw createErr;
+              }
+            }
+          } else {
+            throw new Error('Adresse e-mail ou mot de passe incorrect.');
+          }
         } else {
-          throw new Error('Numéro de téléphone ou mot de passe incorrect.');
+          throw new Error('Adresse e-mail ou mot de passe incorrect.');
         }
       }
 
-      // Safeguard: Coerce role to admin if logging in with the admin phone number
-      if (phone === '0197656263' && user.role !== 'admin') {
-        user.role = 'admin';
-        await updateDoc(docRef, { role: 'admin' });
+      // 2. Resolve Firestore Document
+      docSnap = await getDoc(docRef);
+      let user: DBUser;
+
+      if (!docSnap.exists()) {
+        const isDemoAdmin = phoneStr === '0197656263';
+        const seededUser: DBUser = {
+          phone: phoneStr,
+          name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
+          role: isDemoAdmin ? 'admin' : 'user',
+          passwordHash: passwordHash,
+          referralCode: isDemoAdmin ? 'star_admin' : 'star_agbozo',
+          balanceCommission: isDemoAdmin ? 0 : 4500,
+          balanceCommissionWithdrawn: isDemoAdmin ? 0 : 1000,
+          mfaEnabled: false,
+          parentPhone: isDemoAdmin ? undefined : '0197656263',
+          createdAt: new Date().toISOString()
+        };
+        (seededUser as any).authUid = authUid;
+        await setDoc(docRef, seededUser);
+        user = seededUser;
+      } else {
+        user = docSnap.data() as DBUser;
+        let needsUpdate = false;
+        const updates: any = {};
+        
+        if (user.authUid !== authUid) {
+          updates.authUid = authUid;
+          user.authUid = authUid;
+          needsUpdate = true;
+        }
+        if (user.passwordHash !== passwordHash) {
+          updates.passwordHash = passwordHash;
+          user.passwordHash = passwordHash;
+          needsUpdate = true;
+        }
+        if (phoneStr === '0197656263' && user.role !== 'admin') {
+          updates.role = 'admin';
+          user.role = 'admin';
+          needsUpdate = true;
+        }
+
+        if (needsUpdate) {
+          await updateDoc(docRef, updates);
+        }
       }
 
-      // Populate current browser session authUid to the cloud records
-      let authUid = auth.currentUser?.uid;
-      if (!authUid) {
-        console.log("[Firebase Login] Custom authentication state empty, signing in anonymously on the fly...");
-        try {
-          const cred = await signInAnonymously(auth);
-          authUid = cred.user.uid;
-        } catch (authErr: any) {
-          console.error("[Firebase Login] Anonymous sign-in failed during login.", authErr);
-          if (authErr?.code === 'auth/admin-restricted-operation' || authErr?.message?.includes('admin-restricted-operation')) {
-            throw new Error("L'authentification anonyme est désactivée dans votre console Firebase. Activez-la sous Authentication -> Mode de connexion -> Anonyme.");
-          }
-          throw authErr;
-        }
-      }
-      if (authUid) {
-        await updateDoc(docRef, { authUid });
-        if (user.role === 'admin') {
-          await setDoc(doc(db, 'admins', authUid), { active: true });
-        }
+      // Safeguard: promote admin users in the secondary admins collection
+      if (user.role === 'admin' && authUid) {
+        await setDoc(doc(db, 'admins', authUid), { active: true });
+        console.log("[Firebase Login] Admin authorization mapping verified for UID:", authUid);
       }
 
       return { tempUser: user };
@@ -900,12 +989,13 @@ export const dbService = {
         console.warn("[Firebase Resilient Fallback] Directing login query to LocalStorage");
         onSupabaseFallbackOccurred?.();
         const ldb = getLocalDB();
-        const user = ldb.users[phone];
+        const ldbPhone = phoneOrEmail.includes('@') ? (phoneOrEmail === 'aenestostarrio@gmail.com' ? '0197656263' : phoneOrEmail) : phoneOrEmail;
+        const user = ldb.users[ldbPhone];
         if (!user) {
-          if (phone === '0197656263' || phone === '0161616161') {
-            const isDemoAdmin = phone === '0197656263';
+          if (ldbPhone === '0197656263' || ldbPhone === '0161616161') {
+            const isDemoAdmin = ldbPhone === '0197656263';
             const seededUser: DBUser = {
-              phone,
+              phone: ldbPhone,
               name: isDemoAdmin ? 'Agbozo Admin' : 'Agbozo',
               role: isDemoAdmin ? 'admin' : 'user',
               passwordHash,
@@ -916,18 +1006,18 @@ export const dbService = {
               parentPhone: isDemoAdmin ? undefined : '0197656263',
               createdAt: new Date().toISOString()
             };
-            ldb.users[phone] = seededUser;
+            ldb.users[ldbPhone] = seededUser;
             saveLocalDB(ldb);
             return { tempUser: seededUser };
           }
-          throw new Error('Numéro de téléphone ou mot de passe incorrect.');
+          throw new Error('Adresse e-mail ou mot de passe incorrect.');
         }
         if (user.passwordHash !== passwordHash) {
-          throw new Error('Numéro de téléphone ou mot de passe incorrect.');
+          throw new Error('Adresse e-mail ou mot de passe incorrect.');
         }
         return { tempUser: user };
       }
-      handleFirestoreError(e, OperationType.GET, `users/${phone}`);
+      handleFirestoreError(e, OperationType.GET, `users/${phoneOrEmail}`);
     }
   },
 
@@ -1367,24 +1457,30 @@ export const dbService = {
     }
   },
 
-  async seedSupabaseFromLocal(): Promise<{ success: boolean; message: string }> {
+  async seedFirebaseFromLocal(): Promise<{ success: boolean; message: string }> {
     try {
       if (useLocalStorageSandbox) throw new Error('forced offline');
       
       console.log("[Firebase Native Seeding] Syncing entire initial local state to Firestore...");
       
-      // A. Write Admin promotion (if we can authenticate anonymously / or are already authenticated)
+      // A. Write Admin promotion (if we can authenticate via email/password / or are already authenticated)
       let authUid = auth.currentUser?.uid;
-      let isAnonymousEnabled = true;
+      let isAdminAuthenticated = true;
 
       if (!authUid) {
-        console.log("[Firebase Native Seeding] Custom authentication state empty, signing in anonymously on the fly...");
+        console.log("[Firebase Native Seeding] Custom authentication state empty, signing in as admin on the fly...");
         try {
-          const cred = await signInAnonymously(auth);
+          const cred = await signInWithEmailAndPassword(auth, 'aenestostarrio@gmail.com', 'Azertyui0p');
           authUid = cred?.user?.uid;
         } catch (authErr: any) {
-          isAnonymousEnabled = false;
-          console.warn("[Firebase Native Seeding] Anonymous sign-in failed during seeding. Proceeding with unauthenticated bootstrapping...", authErr);
+          console.log("[Firebase Native Seeding] Admin sign-in failed, trying to create Admin auth account...", authErr?.code);
+          try {
+            const cred = await createUserWithEmailAndPassword(auth, 'aenestostarrio@gmail.com', 'Azertyui0p');
+            authUid = cred?.user?.uid;
+          } catch (createErr: any) {
+            isAdminAuthenticated = false;
+            console.warn("[Firebase Native Seeding] Admin registration failed during seeding. Proceeding without authentication.", createErr);
+          }
         }
       }
       
@@ -1442,9 +1538,9 @@ export const dbService = {
       await setDoc(configDocRef, initialLocalDB.config);
       console.log("[Firebase Native Seeding] Config seeded, database sealed recursively!");
 
-      let resultMsg = "Base Firebase Firestore synchronisée complète ! Toutes les données de démonstration ont été injectées sur votre Cloud.";
-      if (!isAnonymousEnabled) {
-        resultMsg += "\n\n⚠️ NOTE IMPORTANTE : Pour vous connecter ou utiliser le mode Cloud sans déconner, veuillez s'il vous plaît Activer la connexion Anonyme dans votre Console Firebase (Authentication -> Mode de connexion -> Anonyme).";
+      let resultMsg = "Base Firebase Firestore synchronisée complète ! Toutes les données ont été injectées sur votre Cloud de façon sécurisée (avec votre compte Administrateur).";
+      if (!isAdminAuthenticated) {
+        resultMsg += "\n\n⚠️ NOTE : L'inscription/authentification automatique de l'admin a échoué pendant l'injection. Veuillez s'il vous plaît vérifier que la connexion Email/Mot de passe est bien activée sous Authentication -> Mode de connexion -> Email/Mot de passe.";
       }
 
       return { success: true, message: resultMsg };
@@ -1454,7 +1550,7 @@ export const dbService = {
     }
   },
 
-  async checkSupabaseConnection(): Promise<{ success: boolean; error?: string }> {
+  async checkFirebaseConnection(): Promise<{ success: boolean; error?: string }> {
     try {
       await getDocFromServer(doc(db, 'config', 'app'));
       return { success: true };
