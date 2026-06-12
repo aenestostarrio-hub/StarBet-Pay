@@ -348,6 +348,15 @@ export const dbService = {
         if (authUid && currentData.authUid !== authUid) {
           updatePayload.authUid = authUid;
         }
+        
+        // Ensure standard referralCode format: STAR + 6 first characters of UID
+        if (authUid) {
+          const expectedReferralCode = `STAR${authUid.substring(0, 6).toUpperCase()}`;
+          if (currentData.referralCode !== expectedReferralCode) {
+            updatePayload.referralCode = expectedReferralCode;
+          }
+        }
+
         if (Object.keys(updatePayload).length > 0) {
           await updateDoc(docRef, updatePayload);
         }
@@ -368,7 +377,7 @@ export const dbService = {
         name: user.name,
         role: user.role || 'user',
         passwordHash: user.passwordHash || '',
-        referralCode: user.referralCode || (authUid ? `STAR${authUid.substring(0, 6).toUpperCase()}` : `star_${user.phone.substring(user.phone.length - 4)}`),
+        referralCode: authUid ? `STAR${authUid.substring(0, 6).toUpperCase()}` : (user.referralCode || `STAR${user.phone.substring(user.phone.length - 6).toUpperCase()}`),
         balanceCommission: user.balanceCommission || 0,
         balanceCommissionWithdrawn: user.balanceCommissionWithdrawn || 0,
         mfaEnabled: user.mfaEnabled || false,

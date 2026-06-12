@@ -5,6 +5,7 @@ import {
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
   Edit, Calendar, ChevronDown
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { InstallPrompt } from './components/InstallPrompt';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { onSnapshot, collection, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
@@ -868,6 +869,7 @@ export default function App() {
           unsubscribeUserStats = onSnapshot(docUser, (snap) => {
             if (snap.exists()) {
               const freshUser = snap.data() as DBUser;
+              setUser(prev => prev ? { ...prev, ...freshUser } : freshUser);
               const qRefs = query(collection(db, 'users'), where('parentPhone', '==', user.phone));
               onSnapshot(qRefs, (snapRefs) => {
                 setRefStats({
@@ -1770,9 +1772,42 @@ export default function App() {
             
             {/* BRAND HERO */}
             <div className="text-center mb-8 mt-4 animate-fade-in">
-              <div className="mx-auto w-16 h-16 rounded-3xl bg-gradient-to-tr from-cyan-400 to-blue-600 flex items-center justify-center text-slate-900 shadow-xl shadow-cyan-500/10 mb-4">
-                <Star size={32} fill="currentColor" className="text-slate-950 animate-pulse" />
-              </div>
+              <motion.div 
+                initial={{ scale: 0.9, opacity: 0 }}
+                animate={{ 
+                  scale: [1, 1.05, 1],
+                  opacity: 1,
+                  boxShadow: [
+                    "0 10px 25px -5px rgba(6,182,212,0.15), 0 0 0 1px rgba(6,182,212,0.1)",
+                    "0 15px 35px -5px rgba(6,182,212,0.3), 0 0 15px 3px rgba(6,182,212,0.25)",
+                    "0 10px 25px -5px rgba(6,182,212,0.15), 0 0 0 1px rgba(6,182,212,0.1)"
+                  ]
+                }}
+                transition={{ 
+                  duration: 3.5, 
+                  repeat: Infinity, 
+                  ease: "easeInOut" 
+                }}
+                className="mx-auto w-24 h-24 rounded-[28px] bg-gradient-to-tr from-[#0d162d] to-[#192b58] flex items-center justify-center p-0.5 border border-cyan-500/30 mb-5 overflow-hidden"
+              >
+                <div className="w-full h-full rounded-[26px] bg-[#070e20] flex items-center justify-center relative overflow-hidden">
+                  <img 
+                    src="/starbetpay_icon.jpg" 
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const fallback = e.currentTarget.parentElement?.querySelector('.fallback-star');
+                      if (fallback) {
+                        (fallback as HTMLElement).style.display = 'flex';
+                      }
+                    }}
+                    className="w-full h-full object-cover rounded-[25px]" 
+                    alt="StarBetPay Logo" 
+                  />
+                  <div className="fallback-star absolute inset-0 flex items-center justify-center bg-gradient-to-tr from-cyan-950/40 to-[#192b58]/40" style={{ display: 'none' }}>
+                    <Star size={44} fill="currentColor" className="text-cyan-400 animate-pulse" />
+                  </div>
+                </div>
+              </motion.div>
               <h2 className="text-2xl font-extrabold font-display">Bienvenue sur StarBetPay</h2>
               <p className="text-gray-400 text-xs mt-1 px-4 leading-relaxed">
                 Effectuez vos dépôts et retraits 1xBet de manière instantanée, sécurisée et gagnez des bonus d'affiliation attractifs.
@@ -2047,11 +2082,27 @@ export default function App() {
                     <div className="flex justify-between items-center">
                       <div>
                         <h3 className="text-lg font-black font-display text-gray-100">Bonjour, {user.name} 👋</h3>
-                        <p className="text-xs text-gray-400 font-mono">ID parrainage : {user.phone}</p>
+                        <p className="text-xs text-[#00f0ff] font-mono font-bold mt-0.5">ID parrainage : {user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}</p>
                       </div>
                       <div className="text-right">
                         <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-bold">MFA Sécurisé</span>
                       </div>
+                    </div>
+
+                    {/* Dépôt & Retrait Fast Links (Moved up directly under the header info) */}
+                    <div className="bg-[#111a33] border border-slate-850 shadow-xl rounded-3xl p-4 flex justify-between gap-3 text-center">
+                      <button 
+                        onClick={() => setActiveTab('deposit')} 
+                        className="flex-1 py-3 bg-gradient-to-tr from-cyan-500 to-blue-600 hover:opacity-90 active:scale-[0.98] transition-transform text-[#070e20] font-black text-xs rounded-2xl cursor-pointer"
+                      >
+                        Recharger Compte (Dépôt)
+                      </button>
+                      <button 
+                        onClick={() => setActiveTab('withdrawal')} 
+                        className="flex-1 py-3 bg-[#172754] border border-slate-700/60 text-white hover:bg-[#1f336e] active:scale-[0.98] transition-transform font-bold text-xs rounded-2xl cursor-pointer"
+                      >
+                        Demander Retrait
+                      </button>
                     </div>
 
                     {/* Active Push notifications enabler banner */}
@@ -2145,11 +2196,11 @@ export default function App() {
                         <div>
                           <p className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Lien de parrainage</p>
                           <button
-                            onClick={() => handleCopyToClipboard(`${window.location.origin}/?ref=${user.referralCode || user.phone}`)}
+                            onClick={() => handleCopyToClipboard(`${window.location.origin}/?ref=${user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}`)}
                             className="bg-slate-950 text-cyan-400 hover:text-white border border-slate-800 text-[10px] px-2 py-0.5 rounded mt-1.5 flex items-center gap-1 font-semibold text-center w-full"
                           >
                             <Copy size={10} />
-                            Code: {user.referralCode || user.phone}
+                            Code: {user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}
                           </button>
                         </div>
                       </div>
@@ -2188,21 +2239,7 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Fast links buttons list */}
-                    <div className="bg-[#111a33]/50 border border-slate-800 rounded-2xl p-4 flex justify-between gap-3 text-center">
-                      <button 
-                        onClick={() => setActiveTab('deposit')} 
-                        className="flex-1 py-2 bg-gradient-to-tr from-cyan-600 to-cyan-500 rounded-xl text-slate-950 font-bold text-xs"
-                      >
-                        Recharger Compte
-                      </button>
-                      <button 
-                        onClick={() => setActiveTab('withdrawal')} 
-                        className="flex-1 py-2 bg-slate-800 hover:bg-slate-750 text-white font-bold text-xs rounded-xl"
-                      >
-                        Demander Retrait
-                      </button>
-                    </div>
+                    {/* Fast links buttons list moved up */}
 
                   </div>
                 )}
