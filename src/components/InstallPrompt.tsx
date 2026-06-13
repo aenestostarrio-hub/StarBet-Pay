@@ -17,19 +17,36 @@ export function InstallPrompt() {
   const [showGuideModal, setShowGuideModal] = useState(false);
 
   useEffect(() => {
+    let internalPrompt: BeforeInstallPromptEvent | null = null;
+
     const handleBeforeInstall = (e: Event) => {
-      e.preventDefault();
+      // Do NOT prevent default to let Chrome show its native automatic install banner
+      internalPrompt = e as BeforeInstallPromptEvent;
       setDeferredPrompt(e as BeforeInstallPromptEvent);
     };
 
     const handleAppInstalled = () => {
       setInstalled(true);
       setDeferredPrompt(null);
+      internalPrompt = null;
       console.log('StarBetPay PWA was installed successfully!');
+    };
+
+    const triggerPromptOnGesture = () => {
+      if (internalPrompt) {
+        internalPrompt.prompt().catch(err => {
+          console.warn('Native prompt automatic trigger failed:', err);
+        });
+        // Clear so we don't run it again
+        internalPrompt = null;
+        setDeferredPrompt(null);
+      }
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstall);
     window.addEventListener('appinstalled', handleAppInstalled);
+    window.addEventListener('click', triggerPromptOnGesture);
+    window.addEventListener('touchstart', triggerPromptOnGesture);
 
     // Check if running in standalone mode (already installed)
     if (window.matchMedia('(display-mode: standalone)').matches) {
@@ -39,6 +56,8 @@ export function InstallPrompt() {
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstall);
       window.removeEventListener('appinstalled', handleAppInstalled);
+      window.removeEventListener('click', triggerPromptOnGesture);
+      window.removeEventListener('touchstart', triggerPromptOnGesture);
     };
   }, []);
 

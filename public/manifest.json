@@ -16,14 +16,14 @@
       "purpose": "any maskable"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
-      "type": "image/png",
+      "src": "/starbetpay_icon.jpg",
+      "type": "image/jpeg",
       "sizes": "192x192",
       "purpose": "any"
     },
     {
-      "src": "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
-      "type": "image/png",
+      "src": "/starbetpay_icon.jpg",
+      "type": "image/jpeg",
       "sizes": "512x512",
       "purpose": "any maskable"
     }

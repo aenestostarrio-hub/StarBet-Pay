@@ -35,7 +35,7 @@ self.addEventListener('push', (event) => {
   let payload = {
     title: 'StarBetPay 🌟',
     body: 'Nouvelle notification importante de StarBetPay !',
-    icon: 'https://cdn-icons-png.flaticon.com/512/10043/10043372.png',
+    icon: '/starbetpay_icon.jpg',
     url: '/'
   };
 
@@ -49,8 +49,8 @@ self.addEventListener('push', (event) => {
 
   const options = {
     body: payload.body,
-    icon: payload.icon || 'https://cdn-icons-png.flaticon.com/512/10043/10043372.png',
-    badge: 'https://cdn-icons-png.flaticon.com/512/10043/10043372.png',
+    icon: payload.icon || '/starbetpay_icon.jpg',
+    badge: '/starbetpay_icon.jpg',
     vibrate: [150, 100, 150],
     data: {
       url: payload.url || '/'

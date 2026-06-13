@@ -3,7 +3,7 @@ import {
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
-  Edit, Calendar, ChevronDown
+  Edit, Calendar, ChevronDown, Share2, Globe
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { InstallPrompt } from './components/InstallPrompt';
@@ -13,6 +13,8 @@ import { onAuthStateChanged } from 'firebase/auth';
 import { dbService, db, auth, isFirebaseConfigured, setFirebaseConfigured, useLocalStorageSandbox, forceFirebaseProduction, setForceFirebaseProduction, setFirebaseFallbackOccurred } from './lib/firebase';
 // @ts-ignore
 import promoStarrio from './assets/images/promo_starrio_1780940672432.png';
+// @ts-ignore
+import promoHomeStarrio from './assets/images/promo_home_starrio_1781378123658.jpg';
 
 // Global shared AudioContext to bypass modern browser autoplay restrictions elegantly
 let sharedAudioCtx: AudioContext | null = null;
@@ -199,7 +201,11 @@ export default function App() {
     popupMessage: 'Bienvenue sur StarBet Pay, la solution de dépôt & retrait rapide.',
     supportWhatsapp: '+22900000000',
     withdrawalPhysVille: 'Abomey Calavi',
-    withdrawalPhysRue: 'Chez star prono'
+    withdrawalPhysRue: 'Chez star prono',
+    socialWhatsapp: '',
+    socialTiktok: '',
+    socialTelegram: '',
+    socialFacebook: ''
   });
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [coupons, setCoupons] = useState<SportCoupon[]>([]);
@@ -385,7 +391,11 @@ export default function App() {
     popupMessage: '',
     supportWhatsapp: '',
     withdrawalPhysVille: '',
-    withdrawalPhysRue: ''
+    withdrawalPhysRue: '',
+    socialWhatsapp: '',
+    socialTiktok: '',
+    socialTelegram: '',
+    socialFacebook: ''
   });
   const [paymentMethodForm, setPaymentMethodForm] = useState({
     name: '',
@@ -452,7 +462,11 @@ export default function App() {
         popupMessage: configData.popupMessage,
         supportWhatsapp: configData.supportWhatsapp,
         withdrawalPhysVille: configData.withdrawalPhysVille,
-        withdrawalPhysRue: configData.withdrawalPhysRue
+        withdrawalPhysRue: configData.withdrawalPhysRue,
+        socialWhatsapp: configData.socialWhatsapp || '',
+        socialTiktok: configData.socialTiktok || '',
+        socialTelegram: configData.socialTelegram || '',
+        socialFacebook: configData.socialFacebook || ''
       });
 
       const pmData = await dbService.getPaymentMethods();
@@ -611,6 +625,7 @@ export default function App() {
     let unsubscribeCoupons: (() => void) | null = null;
     let unsubscribePaymentMethods: (() => void) | null = null;
     let unsubscribeUserStats: (() => void) | null = null;
+    let unsubscribeRefs: (() => void) | null = null;
 
     const triggerNativeNotification = (title: string, body: string) => {
       try {
@@ -619,8 +634,8 @@ export default function App() {
             navigator.serviceWorker.ready.then((reg) => {
               reg.showNotification(title, {
                 body,
-                icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
-                badge: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png",
+                icon: "/starbetpay_icon.jpg",
+                badge: "/starbetpay_icon.jpg",
                 vibrate: [150, 100, 150],
                 tag: 'starbetpay-notif-' + Date.now(),
                 renotify: true
@@ -629,13 +644,13 @@ export default function App() {
               console.warn("ServiceWorker push fallback:", err);
               new Notification(title, {
                 body,
-                icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+                icon: "/starbetpay_icon.jpg"
               });
             });
           } else {
             new Notification(title, {
               body,
-              icon: "https://cdn-icons-png.flaticon.com/512/10043/10043372.png"
+              icon: "/starbetpay_icon.jpg"
             });
           }
         }
@@ -649,9 +664,9 @@ export default function App() {
       return;
     }
 
-    // Delay subscription if cloud is active but auth has not completed yet
-    if (!useLocalStorageSandbox && !firebaseAuthUid) {
-      console.log('[StarBetPay] Delaying native listener startup until Firebase Auth resolves...');
+    // Delay subscription if cloud is active but auth has not completed yet (only rules for admin role verification)
+    if (!useLocalStorageSandbox && !firebaseAuthUid && user.role === 'admin') {
+      console.log('[StarBetPay] Delaying native listener startup until Firebase Auth resolves for admin verification...');
       return;
     }
 
@@ -729,8 +744,8 @@ export default function App() {
               setPaymentMethods(list);
               const activePm = list.find((p: PaymentMethod) => p.active);
               if (activePm) {
-                setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
-                setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
+                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
               }
             }
           });
@@ -846,8 +861,8 @@ export default function App() {
               setPaymentMethods(list);
               const activePm = list.find((p: PaymentMethod) => p.active);
               if (activePm) {
-                setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
-                setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
+                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
               }
             }
           });
@@ -869,19 +884,39 @@ export default function App() {
           unsubscribeUserStats = onSnapshot(docUser, (snap) => {
             if (snap.exists()) {
               const freshUser = snap.data() as DBUser;
-              setUser(prev => prev ? { ...prev, ...freshUser } : freshUser);
-              const qRefs = query(collection(db, 'users'), where('parentPhone', '==', user.phone));
-              onSnapshot(qRefs, (snapRefs) => {
-                setRefStats({
-                  phone: freshUser.phone,
-                  name: freshUser.name,
-                  balanceCommission: Number(freshUser.balanceCommission || 0),
-                  balanceCommissionWithdrawn: Number(freshUser.balanceCommissionWithdrawn || 0),
-                  filleulsCount: snapRefs.size || 0,
-                  referralCode: freshUser.referralCode
-                });
+              setUser(prev => {
+                if (!prev) return freshUser;
+                if (
+                  prev.name === freshUser.name &&
+                  prev.phone === freshUser.phone &&
+                  prev.role === freshUser.role &&
+                  Number(prev.balanceCommission) === Number(freshUser.balanceCommission) &&
+                  Number(prev.balanceCommissionWithdrawn) === Number(freshUser.balanceCommissionWithdrawn) &&
+                  prev.mfaEnabled === freshUser.mfaEnabled &&
+                  prev.authUid === freshUser.authUid
+                ) {
+                  return prev;
+                }
+                return { ...prev, ...freshUser };
               });
+              setRefStats(prev => ({
+                ...prev,
+                phone: freshUser.phone,
+                name: freshUser.name,
+                balanceCommission: Number(freshUser.balanceCommission || 0),
+                balanceCommissionWithdrawn: Number(freshUser.balanceCommissionWithdrawn || 0),
+                referralCode: freshUser.referralCode
+              }));
             }
+          });
+
+          // Listen to referral counts independently to prevent leak and unneeded trigger loops
+          const qRefs = query(collection(db, 'users'), where('parentPhone', '==', user.phone));
+          unsubscribeRefs = onSnapshot(qRefs, (snapRefs) => {
+            setRefStats(prev => ({
+              ...prev,
+              filleulsCount: snapRefs.size || 0
+            }));
           });
 
         } catch (e) {
@@ -934,13 +969,15 @@ export default function App() {
       if (unsubscribeCoupons) unsubscribeCoupons();
       if (unsubscribePaymentMethods) unsubscribePaymentMethods();
       if (unsubscribeUserStats) unsubscribeUserStats();
+      if (unsubscribeRefs) unsubscribeRefs();
     };
-  }, [user, firebaseAuthUid, isAdminActivated]);
+  }, [user?.phone, user?.role, firebaseAuthUid, isAdminActivated]);
 
   // Handle generic clipboard copies with robust iframe fallback support
   const handleCopyToClipboard = (text: string) => {
     const performCopy = () => {
       setCopiedText(text);
+      showToast("Copié dans le presse-papiers ! 📋", "success");
       setTimeout(() => {
         setCopiedText(null);
       }, 2000);
@@ -1166,6 +1203,20 @@ export default function App() {
     setFormLoading(true);
     setFormMsg(null);
 
+    // Block if there is any pending xbet deposit or withdrawal
+    const hasPendingXbetTx = transactions.some(
+      tx => (tx.type === 'deposit' || tx.type === 'withdrawal') && tx.status === 'pending'
+    );
+    if (hasPendingXbetTx) {
+      setFormLoading(false);
+      setFormMsg({ 
+        type: 'error', 
+        text: "Vous avez déjà une opération de dépôt ou de retrait en cours de traitement. Veuillez bien vouloir patienter la validation de celle-ci avant d'en soumettre une nouvelle." 
+      });
+      showToast("Opération en cours détectée. Veuillez patienter ! ⏳", "error");
+      return;
+    }
+
     const activePmObj = paymentMethods.find(p => p.name === depositForm.paymentMethod);
     const paymentNumberValue = activePmObj ? activePmObj.number : '';
 
@@ -1215,6 +1266,20 @@ export default function App() {
     e.preventDefault();
     setFormLoading(true);
     setFormMsg(null);
+
+    // Block if there is any pending xbet deposit or withdrawal
+    const hasPendingXbetTx = transactions.some(
+      tx => (tx.type === 'deposit' || tx.type === 'withdrawal') && tx.status === 'pending'
+    );
+    if (hasPendingXbetTx) {
+      setFormLoading(false);
+      setFormMsg({ 
+        type: 'error', 
+        text: "Vous avez déjà une opération de dépôt ou de retrait en cours de traitement. Veuillez bien vouloir patienter la validation de celle-ci avant d'en soumettre une nouvelle." 
+      });
+      showToast("Opération en cours détectée. Veuillez patienter ! ⏳", "error");
+      return;
+    }
 
     if (!withdrawalForm.amount || !withdrawalForm.withdrawCode || !withdrawalForm.paymentMethod || !withdrawalForm.paymentNumber) {
       setFormLoading(false);
@@ -1788,9 +1853,9 @@ export default function App() {
                   repeat: Infinity, 
                   ease: "easeInOut" 
                 }}
-                className="mx-auto w-24 h-24 rounded-[28px] bg-gradient-to-tr from-[#0d162d] to-[#192b58] flex items-center justify-center p-0.5 border border-cyan-500/30 mb-5 overflow-hidden"
+                className="mx-auto w-16 h-16 rounded-2xl bg-gradient-to-tr from-[#0d162d] to-[#192b58] flex items-center justify-center p-0.5 border border-cyan-500/30 mb-5 overflow-hidden"
               >
-                <div className="w-full h-full rounded-[26px] bg-[#070e20] flex items-center justify-center relative overflow-hidden">
+                <div className="w-full h-full rounded-[14px] bg-[#070e20] flex items-center justify-center relative overflow-hidden">
                   <img 
                     src="/starbetpay_icon.jpg" 
                     onError={(e) => {
@@ -1800,11 +1865,11 @@ export default function App() {
                         (fallback as HTMLElement).style.display = 'flex';
                       }
                     }}
-                    className="w-full h-full object-cover rounded-[25px]" 
+                    className="w-full h-full object-cover rounded-[12px]" 
                     alt="StarBetPay Logo" 
                   />
                   <div className="fallback-star absolute inset-0 flex items-center justify-center bg-gradient-to-tr from-cyan-950/40 to-[#192b58]/40" style={{ display: 'none' }}>
-                    <Star size={44} fill="currentColor" className="text-cyan-400 animate-pulse" />
+                    <Star size={28} fill="currentColor" className="text-cyan-400 animate-pulse" />
                   </div>
                 </div>
               </motion.div>
@@ -1814,7 +1879,8 @@ export default function App() {
               </p>
             </div>
 
-
+            {/* PWA INSTALLATION TRIGGER FOR GUESTS BEFORE LOGIN */}
+            <InstallPrompt />
 
             {/* LOGIN / SIGNUP CARD */}
             {!tempUser ? (
@@ -1881,22 +1947,7 @@ export default function App() {
                     />
                   </div>
 
-                  {authTab === 'register' && (
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold">Code ou E-mail du Parrain (Facultatif)</label>
-                        <span className="text-[10px] text-cyan-400 font-mono font-bold">Bonus 1%</span>
-                      </div>
-                      <input 
-                        type="text" 
-                        placeholder="Ex: STARXXXXXX ou parrain@starbetpay.com"
-                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-cyan-500 font-sans transition-colors disabled:opacity-50"
-                        value={authForm.parentPhone}
-                        onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
-                        disabled={isAuthLoading}
-                      />
-                    </div>
-                  )}
+
 
                   {authError && (
                     <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-3 flex gap-2 text-xs text-red-400">
@@ -2082,7 +2133,6 @@ export default function App() {
                     <div className="flex justify-between items-center">
                       <div>
                         <h3 className="text-lg font-black font-display text-gray-100">Bonjour, {user.name} 👋</h3>
-                        <p className="text-xs text-[#00f0ff] font-mono font-bold mt-0.5">ID parrainage : {user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}</p>
                       </div>
                       <div className="text-right">
                         <span className="text-[10px] text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full font-bold">MFA Sécurisé</span>
@@ -2136,106 +2186,152 @@ export default function App() {
                       </div>
                     )}
 
-                    {/* Affiliated referral program box */}
-                    <div className="bg-gradient-to-tr from-[#121c3b] to-[#172754] border border-cyan-500/20 rounded-3xl p-5 relative overflow-hidden shadow-xl">
-                      <div className="absolute top-2 right-2 p-1.5 bg-cyan-500/10 text-cyan-400 rounded-full">
-                        <Sparkles size={16} />
-                      </div>
-                      <h4 className="font-extrabold font-display text-sm text-[#00f0ff] mb-1">StarBetPay Parrainage</h4>
-                      <p className="text-gray-300 text-[11px] leading-relaxed mb-4">
-                        Gagnez <strong className="text-white">1% de commission</strong> sur tous les dépôts et retraits effectués et validés par vos filleuls inscrits grâce à vous !
+
+
+                    {/* Nos réseaux sociaux section */}
+                    <div className="bg-[#111a33]/60 border border-slate-850 shadow-xl rounded-3xl p-5 text-center mt-4">
+                      <h4 className="text-xs font-extrabold pb-2.5 uppercase tracking-wider text-gray-300 flex items-center justify-center gap-1.5 border-b border-slate-800/60 mb-4">
+                        <Share2 size={12} className="text-cyan-400" />
+                        Nos Réseaux Sociaux
+                      </h4>
+                      <p className="text-[10px] text-gray-400 max-w-xs mx-auto mb-4">
+                        Rejoignez-nous et suivez nos actualités en direct sur nos différentes plateformes officielles.
                       </p>
-
-                      <div className="bg-slate-950/50 rounded-2xl p-4 border border-slate-800 flex justify-between gap-2.5">
-                        <div className="text-center w-1/2">
-                          <p className="text-[9px] text-gray-400 uppercase font-bold mb-1">Total Gagné</p>
-                          <p className="text-xs font-mono font-bold text-yellow-400">{refStats.balanceCommission + refStats.balanceCommissionWithdrawn} FCFA</p>
-                        </div>
-                        <div className="w-px bg-slate-800" />
-                        <div className="text-center w-1/2">
-                          <p className="text-[9px] text-gray-400 uppercase font-bold mb-1">Total Retiré</p>
-                          <p className="text-xs font-mono font-bold text-gray-300">{refStats.balanceCommissionWithdrawn} FCFA</p>
-                        </div>
-                      </div>
-
-                      <div className="mt-4 pt-4 border-t border-slate-800 flex justify-between items-center">
-                        <div>
-                          <p className="text-[10px] text-gray-400">Disponible pour retrait</p>
-                          <p className="text-lg font-mono font-black text-cyan-400">{refStats.balanceCommission} FCFA</p>
-                        </div>
-                        <button
-                          onClick={handleWithdrawCommissionGains}
-                          disabled={refStats.balanceCommission < 2000}
-                          className="px-4 py-2 bg-cyan-500 disabled:bg-slate-800 disabled:text-gray-500 hover:bg-cyan-400 text-slate-950 font-extrabold rounded-xl text-xs transition-colors shadow-md"
+                      
+                      <div className="grid grid-cols-4 gap-3 max-w-sm mx-auto">
+                        <a 
+                          href={config.socialWhatsapp || (config.supportWhatsapp ? `https://wa.me/${config.supportWhatsapp.replace('+', '')}` : '#')} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#25D366]/20 hover:text-[#25D366] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="WhatsApp"
                         >
-                          Retirer ces gains
-                        </button>
-                      </div>
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#25D366]" viewBox="0 0 24 24">
+                            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.713-1.455L0 24zm6.59-4.846c1.66.986 3.292 1.491 5.341 1.492 5.561 0 10.08-4.516 10.085-10.08.002-2.695-1.047-5.231-2.952-7.137C17.116 1.524 14.582.476 12.01.476c-5.56 0-10.077 4.516-10.082 10.081-.002 2.014.514 3.69 1.487 5.253L2.394 21.57l5.253-1.376z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">WhatsApp</span>
+                        </a>
 
-                      <p className="text-[9px] text-gray-400 text-center mt-3 font-medium">
-                        * Retrait disponible à partir de 2 000 FCFA minimum
-                      </p>
+                        <a 
+                          href={config.socialTiktok || 'https://tiktok.com'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#ff0050]/20 hover:text-[#00f0ff] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="TikTok"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-cyan-400" viewBox="0 0 24 24">
+                            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.17-2.81-.74-3.91-1.72-.09-.08-.18-.17-.26-.26V15c.02 3.12-1.73 6.13-4.73 7.15-3 .99-6.49-.24-8-3.11-1.54-2.87-1.12-6.72 1.09-9.1 2.04-2.22 5.37-2.83 8.04-1.52v4.18c-1.5-.78-3.41-.47-4.57.75-1.07 1.12-1.28 2.92-.48 4.25.78 1.34 2.44 2.07 3.96 1.73 1.51-.31 2.58-1.74 2.57-3.29V.02z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">TikTok</span>
+                        </a>
+
+                        <a 
+                          href={config.socialTelegram || 'https://t.me'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#0088cc]/20 hover:text-[#0088cc] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="Telegram"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#0088cc]" viewBox="0 0 24 24">
+                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.139-.258.258-.53.258l.213-3.03 5.518-4.982c.24-.213-.054-.33-.373-.117L9.707 13.91 6.774 12.99c-.638-.198-.65-.638.133-.946l11.45-4.414c.529-.198.991.118.825.825z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">Telegram</span>
+                        </a>
+
+                        <a 
+                          href={config.socialFacebook || 'https://facebook.com'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#1877F2]/20 hover:text-[#1877F2] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="Facebook"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#1877F2]" viewBox="0 0 24 24">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">Facebook</span>
+                        </a>
+                      </div>
                     </div>
+                    
+                    {/* 1XBET HOME PARTNER PROMO BLOCK */}
+                    <div className="bg-gradient-to-b from-[#111e3b] to-[#0a1125] border border-cyan-500/20 rounded-3xl p-4 md:p-5 shadow-2xl relative overflow-hidden animate-fade-in">
+                      <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
+                      <div className="absolute bottom-0 left-0 w-48 h-48 bg-[#00f0ff]/5 rounded-full blur-3xl -ml-16 -mb-16 pointer-events-none"></div>
+                      
+                      <div className="flex items-center gap-2 mb-3 bg-[#0a1125]/80 py-1.5 px-3 rounded-full border border-slate-800 self-start w-fit">
+                        <span className="animate-pulse w-2 h-2 rounded-full bg-emerald-400"></span>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-cyan-400">Offre Partenaire Exclusive 1xBet 🎁</span>
+                      </div>
 
-                    {/* Stats referrals count */}
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex items-center gap-3">
-                        <div className="p-2.5 rounded-xl bg-orange-500/10 text-orange-400">
-                          <Users size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Vos Statisques</p>
-                          <p className="text-sm font-extrabold font-mono text-white">{refStats.filleulsCount} Filleul(s) inscrit(s)</p>
+                      {/* Customized Home Banner image */}
+                      <div className="relative group overflow-hidden rounded-2xl border border-slate-800 shadow-xl aspect-video w-full mb-4">
+                        <img 
+                          src={promoHomeStarrio} 
+                          alt="1xBet Code Promo STARRIO" 
+                          className="w-full h-full object-cover group-hover:scale-[1.03] transition-transform duration-500" 
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent pointer-events-none"></div>
+                        
+                        <div className="absolute bottom-3 left-3 right-3 flex justify-between items-end">
+                          <div>
+                            <div className="text-[10px] text-gray-300 font-medium">StarBetPay Partenariat</div>
+                            <div className="text-sm font-black text-white font-display tracking-tight leading-none mt-0.5">Code Promo STARRIO</div>
+                          </div>
+                          <span className="bg-cyan-500 text-slate-950 text-[10px] font-extrabold px-2.5 py-1 rounded-lg uppercase tracking-wider leading-none shadow-lg shadow-cyan-500/20">
+                            +200% Bonus
+                          </span>
                         </div>
                       </div>
 
-                      <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex items-center gap-3">
-                        <div className="p-2.5 rounded-xl bg-emerald-500/10 text-emerald-400">
-                          <Wallet size={16} />
-                        </div>
-                        <div>
-                          <p className="text-[9px] text-gray-400 uppercase tracking-widest font-bold">Lien de parrainage</p>
+                      <div className="space-y-3.5">
+                        <p className="text-gray-300 text-[11px] leading-relaxed">
+                          Créez votre compte dès aujourd'hui sur <strong className="text-white">1xBet</strong> en saisissant le code officiel de parrainage <strong className="text-white text-base font-mono font-black mx-1 bg-cyan-500/10 px-1.5 py-0.5 rounded border border-cyan-500/20">STARRIO</strong> pour débloquer automatiquement un bonus exceptionnel de <strong className="text-emerald-400 font-extrabold text-xs bg-emerald-500/5 py-1 px-1.5 rounded">+200% sur votre tout premier dépôt</strong> !
+                        </p>
+
+                        {/* Code Copy Box */}
+                        <div className="flex items-center justify-between gap-2.5 bg-[#070b19] border border-slate-800 rounded-2xl p-2.5">
+                          <div className="pl-1.5">
+                            <span className="text-[8px] text-gray-500 uppercase tracking-widest font-black block">Code Promo à Insérer</span>
+                            <span className="text-sm font-black font-mono tracking-wider text-cyan-400">STARRIO</span>
+                          </div>
                           <button
-                            onClick={() => handleCopyToClipboard(`${window.location.origin}/?ref=${user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}`)}
-                            className="bg-slate-950 text-cyan-400 hover:text-white border border-slate-800 text-[10px] px-2 py-0.5 rounded mt-1.5 flex items-center gap-1 font-semibold text-center w-full"
+                            onClick={() => {
+                              navigator.clipboard.writeText('STARRIO');
+                              setCopiedPromo(true);
+                              showToast('Code promo "STARRIO" copié avec succès ! 📋', 'success');
+                              setTimeout(() => setCopiedPromo(false), 2000);
+                            }}
+                            className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition-all cursor-pointer select-none ${
+                              copiedPromo 
+                                ? 'bg-emerald-500/10 border border-emerald-500/30 text-emerald-400' 
+                                : 'bg-[#121c38] border border-slate-700 text-gray-300 hover:text-white hover:border-slate-500 active:scale-95'
+                            }`}
                           >
-                            <Copy size={10} />
-                            Code: {user.referralCode || (firebaseAuthUid ? 'STAR' + firebaseAuthUid.substring(0, 6).toUpperCase() : user.phone)}
+                            {copiedPromo ? (
+                              <>
+                                <Check size={12} className="text-emerald-400" />
+                                <span>Copié !</span>
+                              </>
+                            ) : (
+                              <>
+                                <Copy size={12} />
+                                <span>Copier le code</span>
+                              </>
+                            )}
                           </button>
                         </div>
-                      </div>
-                    </div>
 
-                    {/* Referral performance analytical visualizer graph (Custom high polishes React SVG Chart) */}
-                    <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 shadow-xl">
-                      <div className="flex justify-between items-center mb-3">
-                        <h4 className="font-extrabold font-display text-xs text-gray-200">Suivi Analytique des Gains (Mensuel)</h4>
-                        <span className="text-[10px] text-emerald-400 font-bold flex items-center gap-0.5">
-                          <TrendingUp size={10} />
-                          +12.4%
-                        </span>
-                      </div>
-                      
-                      {/* Interactive Visual Graph representation */}
-                      <div className="h-28 flex items-end justify-between gap-1 pt-3">
-                        {[
-                          { m: 'Jan', v: 45 },
-                          { m: 'Fév', v: 70 },
-                          { m: 'Mar', v: 38 },
-                          { m: 'Avr', v: 110 },
-                          { m: 'Mai', v: 85 },
-                          { m: 'Juin', v: refStats.balanceCommission / 20 || 30 }
-                        ].map((idx, index) => (
-                          <div key={index} className="flex-1 flex flex-col items-center gap-2">
-                            <div className="w-full bg-[#1b2b52] rounded-t-md relative group cursor-pointer" style={{ height: `${Math.min(100, Math.max(15, idx.v))}px` }}>
-                              <div className="absolute bottom-full left-1/2 transform -translate-x-1/2 mb-1.5 bg-slate-950 text-white rounded text-[8px] font-mono px-1.5 py-0.5 opacity-0 group-hover:opacity-100 transition-opacity z-10 whitespace-nowrap shadow-md pointer-events-none">
-                                {Math.round(idx.v * 20)} FCFA
-                              </div>
-                              <div className="absolute inset-0 bg-cyan-400 rounded-t-md opacity-20 group-hover:opacity-60 transition-opacity" />
-                            </div>
-                            <span className="text-[8px] font-mono text-gray-500">{idx.m}</span>
-                          </div>
-                        ))}
+                        {/* Registration Redirect Button */}
+                        <a
+                          href="https://reffpa.com/L?tag=d_1151631m_97c_&site=1151631&ad=97&r=registration/"
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-center gap-2 w-full bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-extrabold font-display text-xs uppercase tracking-wider py-3.5 px-4 rounded-2xl text-center shadow-lg shadow-emerald-900/40 active:scale-[0.98] transition-all cursor-pointer"
+                        >
+                          <span>Créer un compte 1xBet</span>
+                          <ArrowUpRight size={14} className="animate-pulse" />
+                        </a>
                       </div>
                     </div>
 
@@ -2324,6 +2420,53 @@ export default function App() {
                             </div>
                           </div>
                         )}
+
+                        {/* Special Direct Dial Button for Benin Operations (MTN BENIN or MOOV BENIN) */}
+                        {(() => {
+                          if (!depositForm.paymentMethod) return null;
+                          const normMethod = depositForm.paymentMethod
+                            .normalize("NFD")
+                            .replace(/[\u0300-\u036f]/g, "")
+                            .toUpperCase()
+                            .replace(/\s+/g, " ")
+                            .trim();
+                          
+                          const isMtnBenin = normMethod.includes("MTN") && (normMethod.includes("BENIN") || normMethod.includes("BENI") || normMethod.includes("BÉNIN"));
+                          const isMoovBenin = normMethod.includes("MOOV") && (normMethod.includes("BENIN") || normMethod.includes("BENI") || normMethod.includes("BÉNIN"));
+                          
+                          if (!isMtnBenin && !isMoovBenin) return null;
+                          
+                          const amountNum = depositForm.amount ? String(depositForm.amount).trim() : '0';
+                          const isMtn = isMtnBenin;
+                          const rawCode = isMtn 
+                            ? `*880*41*826519*${amountNum}#` 
+                            : `*855*4*1*105069*${amountNum}*1#`;
+                          const encodedUrl = isMtn 
+                            ? `tel:*880*41*826519*${amountNum}%23` 
+                            : `tel:*855*4*1*105069*${amountNum}*1%23`;
+
+                          return (
+                            <div className="bg-[#12213e] rounded-xl p-4 border border-amber-500/30 mb-4 animate-fade-in text-center relative overflow-hidden">
+                              <div className="absolute top-0 right-0 w-24 h-24 bg-amber-500/5 rounded-full blur-xl pointer-events-none" />
+                              <h4 className="text-[10px] text-amber-400 uppercase font-black mb-1.5 tracking-wider flex items-center justify-center gap-1.5">
+                                <Phone size={10} className="animate-pulse text-amber-400" />
+                                Paiement Direct Automatique
+                              </h4>
+                              <p className="text-gray-300 text-[11px] leading-relaxed mb-3">
+                                Saisissez d'abord votre montant ci-dessus, puis cliquez sur le bouton pour lancer l'appel USSD automatique de : <strong className="text-white font-mono text-xs">{(Number(depositForm.amount) || 0).toLocaleString()} FCFA</strong>.
+                              </p>
+                              
+                              <a
+                                href={encodedUrl}
+                                id={`direct-pay-${isMtn ? 'mtn' : 'moov'}`}
+                                className="inline-flex items-center justify-center gap-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-400 hover:to-orange-400 text-slate-950 font-black text-xs px-5 py-3 rounded-xl transition-all shadow-md shadow-amber-500/10 w-full"
+                              >
+                                <Phone size={12} />
+                                Cliquer pour payer ({rawCode})
+                              </a>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Receipt capture screenshot upload */}
@@ -3572,36 +3715,7 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* Parrainage Stats */}
-                      <div>
-                        <h4 className="text-xs font-bold text-cyan-400 uppercase tracking-widest mb-3 flex items-center gap-1.5 font-display">
-                          <Users size={14} />
-                          Système d'Affiliation (Parrainage)
-                        </h4>
-                        <div className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 space-y-4 shadow-xl">
-                          <div className="flex justify-between items-center pb-3 border-b border-slate-800/60">
-                            <div>
-                              <span className="text-[10px] text-gray-400 uppercase font-bold tracking-wider block">Gains cumulés parrains</span>
-                              <span className="text-lg font-black font-mono text-yellow-550">{sponsorAccumulatedTotal.toLocaleString()} FCFA</span>
-                            </div>
-                            <span className="p-2.5 bg-yellow-500/10 text-yellow-400 rounded-xl">
-                              <Wallet size={18} />
-                            </span>
-                          </div>
 
-                          <div className="grid grid-cols-2 gap-4 text-xs">
-                            <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                              <span className="text-[9px] text-gray-400 uppercase font-bold block mb-1">Gains Payés / Retirés</span>
-                              <span className="font-mono text-emerald-450 font-extrabold text-sm">{sponsorWithdrawnTotal.toLocaleString()} F</span>
-                            </div>
-
-                            <div className="bg-slate-950/40 p-3 rounded-xl border border-slate-800/60">
-                              <span className="text-[9px] text-gray-400 uppercase font-bold block mb-1">Gains en attente</span>
-                              <span className="font-mono text-amber-500 font-extrabold text-sm">{sponsorBalanceTotal.toLocaleString()} F</span>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
 
                       {/* Inscriptions Stats */}
                       <div>
@@ -3760,16 +3874,7 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                <div className="grid grid-cols-2 gap-2 bg-slate-950/40 p-2.5 rounded-xl border border-slate-900 text-[10px]">
-                                  <div>
-                                    <span className="text-gray-500 block uppercase font-bold tracking-tight mb-0.5">Commissions dispo</span>
-                                    <span className="font-mono text-yellow-500 font-bold">{usr.balanceCommission.toLocaleString()} FCFA</span>
-                                  </div>
-                                  <div>
-                                    <span className="text-gray-500 block uppercase font-bold tracking-tight mb-0.5">Commissions retirées</span>
-                                    <span className="font-mono text-emerald-400 font-bold">{usr.balanceCommissionWithdrawn.toLocaleString()} FCFA</span>
-                                  </div>
-                                </div>
+
                               </div>
                             );
                           })
@@ -4583,6 +4688,57 @@ export default function App() {
                         </div>
                       </div>
 
+                      {/* Social Networks Links */}
+                      <div className="pt-2 border-t border-slate-800/60 space-y-3">
+                        <span className="block text-xs font-bold text-gray-200 uppercase tracking-widest text-[9px] flex items-center gap-1">
+                          <Share2 size={11} className="text-cyan-400" />
+                          Nos Réseaux Sociaux
+                        </span>
+                        
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-gray-400 text-[9px] uppercase font-semibold mb-1">Lien WhatsApp</label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: https://wa.me/..."
+                              className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder:text-gray-600"
+                              value={configForm.socialWhatsapp}
+                              onChange={(e) => setConfigForm({ ...configForm, socialWhatsapp: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-gray-400 text-[9px] uppercase font-semibold mb-1">Lien TikTok</label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: https://tiktok.com/@..."
+                              className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder:text-gray-600"
+                              value={configForm.socialTiktok}
+                              onChange={(e) => setConfigForm({ ...configForm, socialTiktok: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-gray-400 text-[9px] uppercase font-semibold mb-1">Lien Telegram</label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: https://t.me/..."
+                              className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder:text-gray-600"
+                              value={configForm.socialTelegram}
+                              onChange={(e) => setConfigForm({ ...configForm, socialTelegram: e.target.value })}
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-gray-400 text-[9px] uppercase font-semibold mb-1">Lien Facebook</label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: https://fb.com/..."
+                              className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder:text-gray-600"
+                              value={configForm.socialFacebook}
+                              onChange={(e) => setConfigForm({ ...configForm, socialFacebook: e.target.value })}
+                            />
+                          </div>
+                        </div>
+                      </div>
+
                       <button
                         type="submit"
                         className="w-full py-2.5 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-extrabold text-xs rounded-xl transition-colors"
@@ -4680,7 +4836,7 @@ export default function App() {
           target="_blank"
           rel="noopener noreferrer"
           title="Contacter le Support WhatsApp"
-          className="fixed bottom-20 right-1/2 translate-x-[180px] z-50 w-12 h-12 rounded-full bg-[#25D366] text-white hover:bg-[#128C7E] shadow-xl flex items-center justify-center transition-transform hover:scale-110 shadow-emerald-500/30 cursor-pointer animate-bounce"
+          className="fixed bottom-20 right-1/2 translate-x-[150px] z-50 w-12 h-12 rounded-full bg-[#25D366] text-white hover:bg-[#128C7E] shadow-xl flex items-center justify-center transition-transform hover:scale-110 shadow-emerald-500/30 cursor-pointer animate-bounce"
         >
           <svg viewBox="0 0 24 24" fill="currentColor" className="w-[24px] h-[24px]">
             <path d="M12.012 2c-5.506 0-9.988 4.471-9.988 9.978 0 1.764.46 3.42 1.263 4.869L2 22l5.318-1.393c1.401.764 2.99 1.199 4.68 1.199 5.506 0 10-4.471 10-9.978C22.012 6.471 17.518 2 12.012 2zm6.273 14.153c-.274.776-1.571 1.408-2.158 1.482-.572.074-1.284.14-3.791-.861-3.21-1.282-5.228-4.544-5.385-4.757-.156-.214-1.284-1.713-1.284-3.27 0-1.558.802-2.325 1.096-2.618.293-.294.636-.367.847-.367.21 0 .422.001.606.01.2.009.467-.076.732.569.274.673.931 2.274 1.01 2.433.08.16.133.344.027.553-.105.21-.157.344-.316.524-.157.18-.328.401-.469.539-.157.152-.321.319-.138.634.183.314.811 1.336 1.737 2.158.919.814 1.696 1.066 2.008 1.223.312.157.5.133.687-.08.187-.214.802-.931 1.01-1.25.21-.318.42-.267.712-.162.293.105 1.865.88 2.178 1.037.312.157.525.234.603.366.078.132.078.761-.196 1.537z" />

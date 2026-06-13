@@ -42,6 +42,10 @@ export interface AppConfig {
   supportWhatsapp: string;
   withdrawalPhysVille: string;
   withdrawalPhysRue: string;
+  socialWhatsapp?: string;
+  socialTiktok?: string;
+  socialTelegram?: string;
+  socialFacebook?: string;
 }
 
 export interface PronoMatch {

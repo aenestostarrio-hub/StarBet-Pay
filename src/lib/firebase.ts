@@ -244,7 +244,11 @@ const initialLocalDB: DBState = {
     popupMessage: 'Bienvenue sur StarBet Pay, la solution de dépôt & retrait rapide.',
     supportWhatsapp: '+22900000000',
     withdrawalPhysVille: 'Abomey Calavi',
-    withdrawalPhysRue: 'Chez star prono'
+    withdrawalPhysRue: 'Chez star prono',
+    socialWhatsapp: '',
+    socialTiktok: '',
+    socialTelegram: '',
+    socialFacebook: ''
   },
   coupons: [
     {
