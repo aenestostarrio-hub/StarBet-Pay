@@ -1,5 +1,7 @@
-// StarBetPay - Progressive Web App Service Worker
-const CACHE_NAME = 'starbetpay-cache-v1';
+// StarBetPay - Advanced Progressive Web App Service Worker
+const CACHE_NAME = 'starbetpay-cache-v2';
+const OFFLINE_URL = '/index.html';
+
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -7,30 +9,82 @@ const ASSETS_TO_CACHE = [
   '/starbetpay_icon.jpg'
 ];
 
-// Perform install and cache elementary files
+// Install Event - Pre-cache necessary files
 self.addEventListener('install', (event) => {
   self.skipWaiting();
   event.waitUntil(
     caches.open(CACHE_NAME).then((cache) => {
-      return cache.addAll(ASSETS_TO_CACHE).catch((err) => {
-        console.warn('Elementary caching bypassed in dev mode:', err);
+      return cache.addAll(ASSETS_TO_CACHE).then(() => {
+        console.log('[Service Worker] Static assets cached successfully');
+      });
+    }).catch((err) => {
+      console.warn('[Service Worker] Pre-caching warning:', err);
+    })
+  );
+});
+
+// Activate Event - Clean up stale caches and claim clients immediately
+self.addEventListener('activate', (event) => {
+  event.waitUntil(
+    caches.keys().then((cacheNames) => {
+      return Promise.all(
+        cacheNames.map((cache) => {
+          if (cache !== CACHE_NAME) {
+            console.log('[Service Worker] Cleaning old cache:', cache);
+            return caches.delete(cache);
+          }
+        })
+      );
+    }).then(() => self.clients.claim())
+  );
+});
+
+// Fetch Event - Hybrid strategy (Network-First with Cache Fallback for dynamic logic, Cache-First for static)
+self.addEventListener('fetch', (event) => {
+  const req = event.request;
+  const url = new URL(req.url);
+
+  // Avoid intercepting non-GET requests, Cloud APIs, or Firebase flows
+  if (req.method !== 'GET' || url.pathname.startsWith('/api') || url.hostname.includes('firestore') || url.hostname.includes('firebase')) {
+    return;
+  }
+
+  event.respondWith(
+    caches.match(req).then((cachedResponse) => {
+      if (cachedResponse) {
+        // Fetch fresh copy in background to keep cache warm and updated
+        fetch(req).then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, networkResponse));
+          }
+        }).catch(() => { /* silent handle offline */ });
+
+        return cachedResponse;
+      }
+
+      return fetch(req).catch(() => {
+        // Safe offline experience
+        if (req.mode === 'navigate') {
+          return caches.match(OFFLINE_URL);
+        }
+        return new Response('Connexion internet requise pour charger cette ressource.', {
+          status: 503,
+          statusText: 'Service Unavailable',
+          headers: new Headers({ 'Content-Type': 'text/plain; charset=utf-8' })
+        });
       });
     })
   );
 });
 
-// Activate handler
-self.addEventListener('activate', (event) => {
-  event.waitUntil(self.clients.claim());
+// Broadcast System Updates for instant UI auto-refresh
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
-// Custom fetch event handler (passing through for normal server/cloud routes)
-self.addEventListener('fetch', (event) => {
-  // Pass through everything to ensure Firebase and local REST APIs run cleanly
-  return;
-});
-
-// LISTEN TO INCOMING REMOTE PUSH NOTIFICATIONS
+// Remote Push Notification Handler (FCM & Firebase Architecture support)
 self.addEventListener('push', (event) => {
   let payload = {
     title: 'StarBetPay 🌟',
@@ -51,10 +105,14 @@ self.addEventListener('push', (event) => {
     body: payload.body,
     icon: payload.icon || '/starbetpay_icon.jpg',
     badge: '/starbetpay_icon.jpg',
-    vibrate: [150, 100, 150],
+    vibrate: [200, 100, 200, 100, 300],
     data: {
       url: payload.url || '/'
-    }
+    },
+    actions: [
+      { action: 'open', title: 'Ouvrir l\'application' },
+      { action: 'close', title: 'Fermer' }
+    ]
   };
 
   event.waitUntil(
@@ -62,14 +120,18 @@ self.addEventListener('push', (event) => {
   );
 });
 
-// HANDLE NOTIFICATION CLICK ACTION
+// App Notification Interaction Rules
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const clickUrl = event.notification.data?.url || '/';
 
+  if (event.action === 'close') {
+    return;
+  }
+
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientsArr) => {
-      // If a window is already open, focus it
+      // Focus existing tab if open
       const matchingClient = clientsArr.find((c) => {
         return new URL(c.url).pathname === new URL(clickUrl, self.location.origin).pathname;
       });
@@ -78,7 +140,7 @@ self.addEventListener('notificationclick', (event) => {
         return matchingClient.focus();
       }
 
-      // Otherwise, open a new window
+      // Open fresh window if none open
       if (self.clients.openWindow) {
         return self.clients.openWindow(clickUrl);
       }

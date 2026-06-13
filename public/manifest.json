@@ -19,19 +19,36 @@
       "src": "/starbetpay_icon.jpg",
       "type": "image/jpeg",
       "sizes": "192x192",
-      "purpose": "any"
+      "purpose": "maskable"
     },
     {
       "src": "/starbetpay_icon.jpg",
       "type": "image/jpeg",
       "sizes": "512x512",
-      "purpose": "any maskable"
+      "purpose": "any"
     }
   ],
   "start_url": "/",
-  "background_color": "#0b132b",
-  "theme_color": "#0b132b",
+  "background_color": "#070b19",
+  "theme_color": "#0a1125",
   "display": "standalone",
   "orientation": "portrait",
-  "categories": ["finance", "utilities"]
+  "categories": ["finance", "utilities"],
+  "prefer_related_applications": false,
+  "shortcuts": [
+    {
+      "name": "Dépôt rapide",
+      "short_name": "Dépôt",
+      "description": "Faire un dépôt instantané sur mon compte 1xBet",
+      "url": "/?action=deposit",
+      "icons": [{ "src": "/starbetpay_icon.jpg", "sizes": "192x192" }]
+    },
+    {
+      "name": "Retrait rapide",
+      "short_name": "Retrait",
+      "description": "Faire une demande de retrait de fonds",
+      "url": "/?action=withdrawal",
+      "icons": [{ "src": "/starbetpay_icon.jpg", "sizes": "192x192" }]
+    }
+  ]
 }
