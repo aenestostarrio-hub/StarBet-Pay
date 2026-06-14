@@ -2139,22 +2139,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Dépôt & Retrait Fast Links (Moved up directly under the header info) */}
-                    <div className="bg-[#111a33] border border-slate-850 shadow-xl rounded-3xl p-4 flex justify-between gap-3 text-center">
-                      <button 
-                        onClick={() => setActiveTab('deposit')} 
-                        className="flex-1 py-3 bg-gradient-to-tr from-cyan-500 to-blue-600 hover:opacity-90 active:scale-[0.98] transition-transform text-[#070e20] font-black text-xs rounded-2xl cursor-pointer"
-                      >
-                        Recharger Compte (Dépôt)
-                      </button>
-                      <button 
-                        onClick={() => setActiveTab('withdrawal')} 
-                        className="flex-1 py-3 bg-[#172754] border border-slate-700/60 text-white hover:bg-[#1f336e] active:scale-[0.98] transition-transform font-bold text-xs rounded-2xl cursor-pointer"
-                      >
-                        Demander Retrait
-                      </button>
-                    </div>
-
                     {/* Active Push notifications enabler banner */}
                     {notificationPermission !== 'granted' && (
                       <div className="bg-gradient-to-r from-purple-950/65 to-violet-950/55 border border-purple-500/25 rounded-3xl p-4 flex flex-col gap-3 text-xs shadow-xl animate-fade-in relative overflow-hidden">
@@ -2186,73 +2170,22 @@ export default function App() {
                       </div>
                     )}
 
-
-
-                    {/* Nos réseaux sociaux section */}
-                    <div className="bg-[#111a33]/60 border border-slate-850 shadow-xl rounded-3xl p-5 text-center mt-4">
-                      <h4 className="text-xs font-extrabold pb-2.5 uppercase tracking-wider text-gray-300 flex items-center justify-center gap-1.5 border-b border-slate-800/60 mb-4">
-                        <Share2 size={12} className="text-cyan-400" />
-                        Nos Réseaux Sociaux
-                      </h4>
-                      <p className="text-[10px] text-gray-400 max-w-xs mx-auto mb-4">
-                        Rejoignez-nous et suivez nos actualités en direct sur nos différentes plateformes officielles.
-                      </p>
-                      
-                      <div className="grid grid-cols-4 gap-3 max-w-sm mx-auto">
-                        <a 
-                          href={config.socialWhatsapp || (config.supportWhatsapp ? `https://wa.me/${config.supportWhatsapp.replace('+', '')}` : '#')} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="bg-[#1c324c] hover:bg-[#25D366]/20 hover:text-[#25D366] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
-                          title="WhatsApp"
-                        >
-                          <svg className="w-5 h-5 fill-current shrink-0 text-[#25D366]" viewBox="0 0 24 24">
-                            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.713-1.455L0 24zm6.59-4.846c1.66.986 3.292 1.491 5.341 1.492 5.561 0 10.08-4.516 10.085-10.08.002-2.695-1.047-5.231-2.952-7.137C17.116 1.524 14.582.476 12.01.476c-5.56 0-10.077 4.516-10.082 10.081-.002 2.014.514 3.69 1.487 5.253L2.394 21.57l5.253-1.376z"/>
-                          </svg>
-                          <span className="text-[8px] font-bold">WhatsApp</span>
-                        </a>
-
-                        <a 
-                          href={config.socialTiktok || 'https://tiktok.com'} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="bg-[#1c324c] hover:bg-[#ff0050]/20 hover:text-[#00f0ff] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
-                          title="TikTok"
-                        >
-                          <svg className="w-5 h-5 fill-current shrink-0 text-cyan-400" viewBox="0 0 24 24">
-                            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.17-2.81-.74-3.91-1.72-.09-.08-.18-.17-.26-.26V15c.02 3.12-1.73 6.13-4.73 7.15-3 .99-6.49-.24-8-3.11-1.54-2.87-1.12-6.72 1.09-9.1 2.04-2.22 5.37-2.83 8.04-1.52v4.18c-1.5-.78-3.41-.47-4.57.75-1.07 1.12-1.28 2.92-.48 4.25.78 1.34 2.44 2.07 3.96 1.73 1.51-.31 2.58-1.74 2.57-3.29V.02z"/>
-                          </svg>
-                          <span className="text-[8px] font-bold">TikTok</span>
-                        </a>
-
-                        <a 
-                          href={config.socialTelegram || 'https://t.me'} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="bg-[#1c324c] hover:bg-[#0088cc]/20 hover:text-[#0088cc] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
-                          title="Telegram"
-                        >
-                          <svg className="w-5 h-5 fill-current shrink-0 text-[#0088cc]" viewBox="0 0 24 24">
-                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.139-.258.258-.53.258l.213-3.03 5.518-4.982c.24-.213-.054-.33-.373-.117L9.707 13.91 6.774 12.99c-.638-.198-.65-.638.133-.946l11.45-4.414c.529-.198.991.118.825.825z"/>
-                          </svg>
-                          <span className="text-[8px] font-bold">Telegram</span>
-                        </a>
-
-                        <a 
-                          href={config.socialFacebook || 'https://facebook.com'} 
-                          target="_blank" 
-                          rel="noopener noreferrer"
-                          className="bg-[#1c324c] hover:bg-[#1877F2]/20 hover:text-[#1877F2] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
-                          title="Facebook"
-                        >
-                          <svg className="w-5 h-5 fill-current shrink-0 text-[#1877F2]" viewBox="0 0 24 24">
-                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
-                          </svg>
-                          <span className="text-[8px] font-bold">Facebook</span>
-                        </a>
-                      </div>
+                    {/* Dépôt & Retrait Fast Links (Moved up directly under the header info) */}
+                    <div className="bg-[#111a33] border border-slate-850 shadow-xl rounded-3xl p-4 flex justify-between gap-3 text-center">
+                      <button 
+                        onClick={() => setActiveTab('deposit')} 
+                        className="flex-1 py-3 bg-gradient-to-tr from-cyan-500 to-blue-600 hover:opacity-90 active:scale-[0.98] transition-transform text-[#070e20] font-black text-xs rounded-2xl cursor-pointer"
+                      >
+                        Recharger Compte (Dépôt)
+                      </button>
+                      <button 
+                        onClick={() => setActiveTab('withdrawal')} 
+                        className="flex-1 py-3 bg-[#172754] border border-slate-700/60 text-white hover:bg-[#1f336e] active:scale-[0.98] transition-transform font-bold text-xs rounded-2xl cursor-pointer"
+                      >
+                        Demander Retrait
+                      </button>
                     </div>
-                    
+
                     {/* 1XBET HOME PARTNER PROMO BLOCK */}
                     <div className="bg-gradient-to-b from-[#111e3b] to-[#0a1125] border border-cyan-500/20 rounded-3xl p-4 md:p-5 shadow-2xl relative overflow-hidden animate-fade-in">
                       <div className="absolute top-0 right-0 w-48 h-48 bg-cyan-500/5 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
@@ -2331,6 +2264,71 @@ export default function App() {
                         >
                           <span>Créer un compte 1xBet</span>
                           <ArrowUpRight size={14} className="animate-pulse" />
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Nos réseaux sociaux section */}
+                    <div className="bg-[#111a33]/60 border border-slate-850 shadow-xl rounded-3xl p-5 text-center mt-4">
+                      <h4 className="text-xs font-extrabold pb-2.5 uppercase tracking-wider text-gray-300 flex items-center justify-center gap-1.5 border-b border-slate-800/60 mb-4">
+                        <Share2 size={12} className="text-cyan-400" />
+                        Nos Réseaux Sociaux
+                      </h4>
+                      <p className="text-[10px] text-gray-400 max-w-xs mx-auto mb-4">
+                        Rejoignez-nous et suivez nos actualités en direct sur nos différentes plateformes officielles.
+                      </p>
+                      
+                      <div className="grid grid-cols-4 gap-3 max-w-sm mx-auto">
+                        <a 
+                          href={config.socialWhatsapp || (config.supportWhatsapp ? `https://wa.me/${config.supportWhatsapp.replace('+', '')}` : '#')} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#25D366]/20 hover:text-[#25D366] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="WhatsApp"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#25D366]" viewBox="0 0 24 24">
+                            <path d="M.057 24l1.687-6.163c-1.041-1.804-1.588-3.849-1.587-5.946C.06 5.348 5.397.01 12.008.01c3.202.001 6.212 1.246 8.477 3.514 2.266 2.268 3.507 5.28 3.505 8.484-.004 6.657-5.34 11.997-11.953 11.997-2.005-.001-3.973-.502-5.713-1.455L0 24zm6.59-4.846c1.66.986 3.292 1.491 5.341 1.492 5.561 0 10.08-4.516 10.085-10.08.002-2.695-1.047-5.231-2.952-7.137C17.116 1.524 14.582.476 12.01.476c-5.56 0-10.077 4.516-10.082 10.081-.002 2.014.514 3.69 1.487 5.253L2.394 21.57l5.253-1.376z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">WhatsApp</span>
+                        </a>
+
+                        <a 
+                          href={config.socialTiktok || 'https://tiktok.com'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#ff0050]/20 hover:text-[#00f0ff] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="TikTok"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-cyan-400" viewBox="0 0 24 24">
+                            <path d="M12.525.02c1.31-.02 2.61-.01 3.91-.02.08 1.53.63 3.09 1.75 4.17 1.12 1.11 2.7 1.62 4.24 1.79v4.03c-1.44-.17-2.81-.74-3.91-1.72-.09-.08-.18-.17-.26-.26V15c.02 3.12-1.73 6.13-4.73 7.15-3 .99-6.49-.24-8-3.11-1.54-2.87-1.12-6.72 1.09-9.1 2.04-2.22 5.37-2.83 8.04-1.52v4.18c-1.5-.78-3.41-.47-4.57.75-1.07 1.12-1.28 2.92-.48 4.25.78 1.34 2.44 2.07 3.96 1.73 1.51-.31 2.58-1.74 2.57-3.29V.02z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">TikTok</span>
+                        </a>
+
+                        <a 
+                          href={config.socialTelegram || 'https://t.me'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#0088cc]/20 hover:text-[#0088cc] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="Telegram"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#0088cc]" viewBox="0 0 24 24">
+                            <path d="M12 0C5.373 0 0 5.373 0 12s5.373 12 12 12 12-5.373 12-12S18.627 0 12 0zm5.894 8.221l-1.97 9.28c-.145.658-.537.818-1.084.508l-3-2.21-1.446 1.394c-.14.139-.258.258-.53.258l.213-3.03 5.518-4.982c.24-.213-.054-.33-.373-.117L9.707 13.91 6.774 12.99c-.638-.198-.65-.638.133-.946l11.45-4.414c.529-.198.991.118.825.825z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">Telegram</span>
+                        </a>
+
+                        <a 
+                          href={config.socialFacebook || 'https://facebook.com'} 
+                          target="_blank" 
+                          rel="noopener noreferrer"
+                          className="bg-[#1c324c] hover:bg-[#1877F2]/20 hover:text-[#1877F2] text-white border border-slate-800 p-3 rounded-2xl flex flex-col items-center gap-1.5 transition-all scale-100 hover:scale-[1.03] active:scale-95"
+                          title="Facebook"
+                        >
+                          <svg className="w-5 h-5 fill-current shrink-0 text-[#1877F2]" viewBox="0 0 24 24">
+                            <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+                          </svg>
+                          <span className="text-[8px] font-bold">Facebook</span>
                         </a>
                       </div>
                     </div>
