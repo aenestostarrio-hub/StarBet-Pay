@@ -137,6 +137,11 @@ self.addEventListener('notificationclick', (event) => {
       });
 
       if (matchingClient) {
+        const urlObj = new URL(clickUrl, self.location.origin);
+        const tab = urlObj.searchParams.get('tab');
+        if (tab) {
+          matchingClient.postMessage({ type: 'NAVIGATE_TO_TAB', tab: tab });
+        }
         return matchingClient.focus();
       }
 

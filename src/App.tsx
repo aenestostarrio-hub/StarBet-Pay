@@ -212,6 +212,8 @@ export default function App() {
 
   const knownTxIdsRef = useRef<Set<string>>(new Set());
   const transactionsRef = useRef<DBTransaction[]>([]);
+  const notifiedCouponsRef = useRef<Record<string, number>>(JSON.parse(localStorage.getItem('starbetpay_notified_coupons_matches') || '{}'));
+  const isFirstCouponsLoadRef = useRef<boolean>(true);
 
   // Client Side UI Active Tab ('home', 'deposit', 'pronos', 'withdrawal', 'history')
   const [activeTab, setActiveTab] = useState<string>('home');
@@ -550,6 +552,31 @@ export default function App() {
       setAuthForm(prev => ({ ...prev, parentPhone: refCode }));
       setAuthTab('register');
     }
+
+    const tabParam = params.get('tab');
+    if (tabParam) {
+      setActiveTab(tabParam);
+    }
+
+    const handleSWMessage = (event: MessageEvent) => {
+      if (event.data && event.data.type === 'NAVIGATE_TO_TAB') {
+        const targetTab = event.data.tab;
+        if (targetTab) {
+          setActiveTab(targetTab);
+        }
+      }
+    };
+    window.addEventListener('message', handleSWMessage);
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.addEventListener('message', handleSWMessage);
+    }
+
+    return () => {
+      window.removeEventListener('message', handleSWMessage);
+      if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.removeEventListener('message', handleSWMessage);
+      }
+    };
   }, []);
 
   // Update data state depending on user session with automatic server synchronization
@@ -627,7 +654,7 @@ export default function App() {
     let unsubscribeUserStats: (() => void) | null = null;
     let unsubscribeRefs: (() => void) | null = null;
 
-    const triggerNativeNotification = (title: string, body: string) => {
+    const triggerNativeNotification = (title: string, body: string, dataUrl: string = '/') => {
       try {
         if ('Notification' in window && Notification.permission === 'granted') {
           if ('serviceWorker' in navigator) {
@@ -638,20 +665,29 @@ export default function App() {
                 badge: "/starbetpay_icon.jpg",
                 vibrate: [150, 100, 150],
                 tag: 'starbetpay-notif-' + Date.now(),
-                renotify: true
+                renotify: true,
+                data: {
+                  url: dataUrl
+                }
               } as any);
             }).catch((err) => {
               console.warn("ServiceWorker push fallback:", err);
               new Notification(title, {
                 body,
-                icon: "/starbetpay_icon.jpg"
-              });
+                icon: "/starbetpay_icon.jpg",
+                data: {
+                  url: dataUrl
+                }
+              } as any);
             });
           } else {
             new Notification(title, {
               body,
-              icon: "/starbetpay_icon.jpg"
-            });
+              icon: "/starbetpay_icon.jpg",
+              data: {
+                url: dataUrl
+              }
+            } as any);
           }
         }
       } catch (e) {
@@ -703,10 +739,11 @@ export default function App() {
                   });
                   
                   // Trigger desktop & in-app alerts
-                  const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                  const opType = tx.type === 'deposit' ? 'dépôt' : 'retrait';
+                  const notifyMsg = `Nouveau ${opType} de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
                   showToast(notifyMsg, 'info');
-                  triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
-                  addInAppNotification("Nouvelle Transaction 🔔", notifyMsg, 'info');
+                  triggerNativeNotification(`Nouveau ${opType} StarBetPay 🔔`, notifyMsg);
+                  addInAppNotification(`Nouveau ${opType} 🔔`, notifyMsg, 'info');
                 }
               });
             }
@@ -786,10 +823,11 @@ export default function App() {
                     if (prev.some(p => p.id === tx.id)) return prev;
                     return [tx, ...prev];
                   });
-                  const notifyMsg = `Nouveau dépôt/retrait de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
+                  const opType = tx.type === 'deposit' ? 'dépôt' : 'retrait';
+                  const notifyMsg = `Nouveau ${opType} de ${tx.userName} (${tx.amount.toLocaleString()} FCFA)`;
                   showToast(notifyMsg, 'info');
-                  triggerNativeNotification("Nouvelle transaction StarBetPay 🔔", notifyMsg);
-                  addInAppNotification("Nouvelle Transaction 🔔", notifyMsg, 'info');
+                  triggerNativeNotification(`Nouveau ${opType} StarBetPay 🔔`, notifyMsg);
+                  addInAppNotification(`Nouveau ${opType} 🔔`, notifyMsg, 'info');
                 }
               }
             });
@@ -875,6 +913,32 @@ export default function App() {
               list.push(d.data() as SportCoupon);
             });
             if (list.length > 0) {
+              if (!isFirstCouponsLoadRef.current) {
+                list.forEach(c => {
+                  const currentCount = c.matches ? c.matches.length : 0;
+                  const prevCount = notifiedCouponsRef.current[c.id] ?? 0;
+                  if (currentCount > 0 && prevCount === 0) {
+                    const couponLabel = c.id === 'secured' ? 'COUPON CÔTE 2' : c.id === 'medium' ? 'COUPON CÔTE 5' : 'COUPON CÔTE 10';
+                    const notifTitle = `Nouveau coupon de Côte disponible ! ⚽`;
+                    const notifBody = `Le ${couponLabel || c.title} a été mis en ligne avec succès ! Cliquez pour voir les pronostics. 🔥`;
+
+                    playChimeNotification();
+                    triggerNativeNotification(notifTitle, notifBody, '/?tab=pronos');
+                    addInAppNotification(notifTitle, notifBody, 'success');
+                    showToast(notifBody, 'success');
+                  }
+                });
+              }
+
+              // Update the trackers
+              const updatedTrackers: Record<string, number> = { ...notifiedCouponsRef.current };
+              list.forEach(c => {
+                updatedTrackers[c.id] = c.matches ? c.matches.length : 0;
+              });
+              notifiedCouponsRef.current = updatedTrackers;
+              localStorage.setItem('starbetpay_notified_coupons_matches', JSON.stringify(updatedTrackers));
+              isFirstCouponsLoadRef.current = false;
+
               setCoupons(list);
             }
           });
@@ -952,6 +1016,32 @@ export default function App() {
             const freshStats = await dbService.getUserStats(user.phone);
             setRefStats(freshStats);
             const freshCoupons = await dbService.getCoupons();
+            if (freshCoupons && freshCoupons.length > 0) {
+              if (!isFirstCouponsLoadRef.current) {
+                freshCoupons.forEach(c => {
+                  const currentCount = c.matches ? c.matches.length : 0;
+                  const prevCount = notifiedCouponsRef.current[c.id] ?? 0;
+                  if (currentCount > 0 && prevCount === 0) {
+                    const couponLabel = c.id === 'secured' ? 'COUPON CÔTE 2' : c.id === 'medium' ? 'COUPON CÔTE 5' : 'COUPON CÔTE 10';
+                    const notifTitle = `Nouveau coupon de Côte disponible ! ⚽`;
+                    const notifBody = `Le ${couponLabel || c.title} a été mis en ligne avec succès ! Cliquez pour voir les pronostics. 🔥`;
+
+                    playChimeNotification();
+                    triggerNativeNotification(notifTitle, notifBody, '/?tab=pronos');
+                    addInAppNotification(notifTitle, notifBody, 'success');
+                    showToast(notifBody, 'success');
+                  }
+                });
+              }
+
+              const updatedTrackers: Record<string, number> = { ...notifiedCouponsRef.current };
+              freshCoupons.forEach(c => {
+                updatedTrackers[c.id] = c.matches ? c.matches.length : 0;
+              });
+              notifiedCouponsRef.current = updatedTrackers;
+              localStorage.setItem('starbetpay_notified_coupons_matches', JSON.stringify(updatedTrackers));
+              isFirstCouponsLoadRef.current = false;
+            }
             setCoupons(freshCoupons);
           } catch (e) {
             console.warn('Client background sync loop issue:', e);
@@ -2592,10 +2682,7 @@ export default function App() {
                   });
 
                   const availableCoupons = sortedCoupons.filter(c => {
-                    if (!c.matches || c.matches.length === 0) return false;
-                    if (!c.date) return false;
-                    const normalizedCouponDate = normalizeToISODate(c.date);
-                    return normalizedCouponDate === normalizedToday;
+                    return c.matches && c.matches.length > 0;
                   });
 
                   return (
