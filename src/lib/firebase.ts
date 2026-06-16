@@ -1,6 +1,6 @@
 /// <reference types="vite/client" />
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword } from 'firebase/auth';
+import { getAuth, signInAnonymously, onAuthStateChanged, createUserWithEmailAndPassword, signInWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth';
 import { 
   initializeFirestore, doc, getDoc, getDocs, setDoc as originalSetDoc, updateDoc as originalUpdateDoc, 
   collection, query, where, orderBy, getDocFromServer, deleteDoc 
@@ -489,27 +489,75 @@ export const dbService = {
     }
   },
 
-  async addOrUpdatePaymentMethod(name: string, number: string): Promise<PaymentMethod[]> {
+  async addOrUpdatePaymentMethod(
+    name: string, 
+    number: string, 
+    allowDeposit: boolean = true, 
+    allowWithdrawal: boolean = true,
+    previousName?: string
+  ): Promise<PaymentMethod[]> {
     try {
       if (useLocalStorageSandbox) throw new Error('forced offline');
+      
+      if (previousName && previousName !== name) {
+        const oldDocRef = doc(db, 'paymentMethods', previousName);
+        await deleteDoc(oldDocRef);
+      }
+      
       const docRef = doc(db, 'paymentMethods', name);
-      await setDoc(docRef, { name, number, active: true });
+      let active = true;
+      try {
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          active = docSnap.data().active !== false;
+        }
+      } catch (err) {
+        console.warn("Could not check active status, defaulting to active: true");
+      }
+
+      await setDoc(docRef, { name, number, active, allowDeposit, allowWithdrawal });
       return this.getPaymentMethods();
     } catch (e) {
       if (isOfflineOrError(e)) {
         console.warn("[Firebase Resilient Fallback] Directing addOrUpdatePaymentMethod query to LocalStorage");
         onSupabaseFallbackOccurred?.();
         const ldb = getLocalDB();
+        
+        if (previousName && previousName !== name) {
+          ldb.paymentMethods = ldb.paymentMethods.filter(p => p.name !== previousName);
+        }
+
         const idx = ldb.paymentMethods.findIndex(p => p.name === name);
         if (idx !== -1) {
           ldb.paymentMethods[idx].number = number;
+          ldb.paymentMethods[idx].allowDeposit = allowDeposit;
+          ldb.paymentMethods[idx].allowWithdrawal = allowWithdrawal;
         } else {
-          ldb.paymentMethods.push({ name, number, active: true });
+          ldb.paymentMethods.push({ name, number, active: true, allowDeposit, allowWithdrawal });
         }
         saveLocalDB(ldb);
         return ldb.paymentMethods;
       }
       handleFirestoreError(e, OperationType.WRITE, `paymentMethods/${name}`);
+    }
+  },
+
+  async deletePaymentMethod(name: string): Promise<PaymentMethod[]> {
+    try {
+      if (useLocalStorageSandbox) throw new Error('forced offline');
+      const docRef = doc(db, 'paymentMethods', name);
+      await deleteDoc(docRef);
+      return this.getPaymentMethods();
+    } catch (e) {
+      if (isOfflineOrError(e)) {
+        console.warn("[Firebase Resilient Fallback] Directing deletePaymentMethod query to LocalStorage");
+        onSupabaseFallbackOccurred?.();
+        const ldb = getLocalDB();
+        ldb.paymentMethods = ldb.paymentMethods.filter(p => p.name !== name);
+        saveLocalDB(ldb);
+        return ldb.paymentMethods;
+      }
+      handleFirestoreError(e, OperationType.DELETE, `paymentMethods/${name}`);
     }
   },
 
@@ -599,16 +647,21 @@ export const dbService = {
       if (docSnap.exists()) {
         const coupon = docSnap.data() as SportCoupon;
         coupon.status = status;
-        coupon.date = new Date().toLocaleString('fr-FR', {
-          day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-        });
+        const todayString = new Date().toLocaleDateString('fr-FR');
+        coupon.date = todayString;
+        
+        // 1. Update the active coupon in the coupons collection
+        await setDoc(docRef, coupon);
         
         if (status !== 'pending') {
-          // If won/lost, move to past coupons history
-          await setDoc(doc(db, 'pastCoupons', id), coupon);
-          await deleteDoc(docRef);
-        } else {
-          await setDoc(docRef, coupon);
+          // 2. If won/lost, save an archived copy with a unique timestamped ID to pastCoupons
+          const uniqueHistoryId = `${id}_${Date.now()}`;
+          const archivedCoupon = {
+            ...coupon,
+            id: uniqueHistoryId,
+            status: status
+          };
+          await setDoc(doc(db, 'pastCoupons', uniqueHistoryId), archivedCoupon);
         }
       }
       const active = await this.getCoupons();
@@ -623,13 +676,23 @@ export const dbService = {
         if (idx !== -1) {
           const coupon = ldb.coupons[idx];
           coupon.status = status;
-          coupon.date = new Date().toLocaleString('fr-FR', {
-            day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit'
-          });
+          const todayString = new Date().toLocaleDateString('fr-FR');
+          coupon.date = todayString;
+          
+          // Update active coupon in LocalStorage
+          ldb.coupons[idx] = coupon;
+
           if (status !== 'pending') {
             if (!ldb.pastCoupons) ldb.pastCoupons = [];
-            ldb.pastCoupons.unshift(coupon);
-            ldb.coupons.splice(idx, 1);
+            
+            // Save archived copy with a unique timestamped ID to pastCoupons list
+            const uniqueHistoryId = `${id}_${Date.now()}`;
+            const archivedCoupon = {
+              ...coupon,
+              id: uniqueHistoryId,
+              status: status
+            };
+            ldb.pastCoupons.unshift(archivedCoupon);
           }
         }
         saveLocalDB(ldb);
@@ -1028,6 +1091,18 @@ export const dbService = {
         return { tempUser: user };
       }
       handleFirestoreError(e, OperationType.GET, `users/${phoneOrEmail}`);
+    }
+  },
+
+  async sendPasswordReset(email: string): Promise<void> {
+    try {
+      if (useLocalStorageSandbox) throw new Error('forced offline');
+      await sendPasswordResetEmail(auth, email.trim().toLowerCase());
+    } catch (e) {
+      if (isOfflineOrError(e)) {
+        throw new Error("L'envoi de l'e-mail de réinitialisation n'est pas disponible en mode hors ligne.");
+      }
+      throw e;
     }
   },
 

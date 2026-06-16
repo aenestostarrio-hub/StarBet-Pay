@@ -3,7 +3,7 @@ import {
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
-  Edit, Calendar, ChevronDown, Share2, Globe
+  Edit, Calendar, ChevronDown, Share2, Globe, Trash2
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { InstallPrompt } from './components/InstallPrompt';
@@ -401,7 +401,11 @@ export default function App() {
   });
   const [paymentMethodForm, setPaymentMethodForm] = useState({
     name: '',
-    number: ''
+    number: '',
+    allowDeposit: true,
+    allowWithdrawal: true,
+    isEditing: false,
+    previousName: ''
   });
 
   const [pastCoupons, setPastCoupons] = useState<SportCoupon[]>([]);
@@ -473,11 +477,15 @@ export default function App() {
 
       const pmData = await dbService.getPaymentMethods();
       setPaymentMethods(pmData);
-      // Default select active payment method
-      const activePm = pmData.find((p: PaymentMethod) => p.active);
-      if (activePm) {
-        setDepositForm(prev => ({ ...prev, paymentMethod: activePm.name }));
-        setWithdrawalForm(prev => ({ ...prev, paymentMethod: activePm.name }));
+      
+      // Default select active payment method for deposit/withdrawal separately
+      const activeDepPm = pmData.find((p: PaymentMethod) => p.active && p.allowDeposit !== false);
+      const activeWithPm = pmData.find((p: PaymentMethod) => p.active && p.allowWithdrawal !== false);
+      if (activeDepPm) {
+        setDepositForm(prev => ({ ...prev, paymentMethod: activeDepPm.name }));
+      }
+      if (activeWithPm) {
+        setWithdrawalForm(prev => ({ ...prev, paymentMethod: activeWithPm.name }));
       }
 
       const couponsData = await dbService.getCoupons();
@@ -650,6 +658,7 @@ export default function App() {
     let unsubscribeUsers: (() => void) | null = null;
     let unsubscribeConfig: (() => void) | null = null;
     let unsubscribeCoupons: (() => void) | null = null;
+    let unsubscribePastCoupons: (() => void) | null = null;
     let unsubscribePaymentMethods: (() => void) | null = null;
     let unsubscribeUserStats: (() => void) | null = null;
     let unsubscribeRefs: (() => void) | null = null;
@@ -779,10 +788,13 @@ export default function App() {
             });
             if (list.length > 0) {
               setPaymentMethods(list);
-              const activePm = list.find((p: PaymentMethod) => p.active);
-              if (activePm) {
-                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
-                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
+              const activeDepPm = list.find((p: PaymentMethod) => p.active && p.allowDeposit !== false);
+              const activeWithPm = list.find((p: PaymentMethod) => p.active && p.allowWithdrawal !== false);
+              if (activeDepPm) {
+                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activeDepPm.name });
+              }
+              if (activeWithPm) {
+                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activeWithPm.name });
               }
             }
           });
@@ -794,9 +806,18 @@ export default function App() {
             snap.forEach(d => {
               list.push(d.data() as SportCoupon);
             });
-            if (list.length > 0) {
-              setCoupons(list);
-            }
+            setCoupons(list);
+          });
+
+          // Listen to all past coupons in real time for admins
+          const qPastCouponsAdmin = collection(db, 'pastCoupons');
+          unsubscribePastCoupons = onSnapshot(qPastCouponsAdmin, (snap) => {
+            const list: SportCoupon[] = [];
+            snap.forEach(d => {
+              list.push(d.data() as SportCoupon);
+            });
+            const sortedPast = list.sort((a, b) => b.id.localeCompare(a.id));
+            setPastCoupons(sortedPast);
           });
 
         } catch (e) {
@@ -835,6 +856,11 @@ export default function App() {
             setTransactions(freshTxs);
             const usersData = await dbService.getUsers();
             setAllUsers(usersData);
+
+            const cpState = await dbService.getCoupons();
+            setCoupons(cpState);
+            const pcpState = await dbService.getPastCoupons();
+            setPastCoupons(pcpState);
           } catch (e) {
             console.warn('Admin background sync loop issue:', e);
           }
@@ -897,10 +923,13 @@ export default function App() {
             });
             if (list.length > 0) {
               setPaymentMethods(list);
-              const activePm = list.find((p: PaymentMethod) => p.active);
-              if (activePm) {
-                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
-                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activePm.name });
+              const activeDepPm = list.find((p: PaymentMethod) => p.active && p.allowDeposit !== false);
+              const activeWithPm = list.find((p: PaymentMethod) => p.active && p.allowWithdrawal !== false);
+              if (activeDepPm) {
+                setDepositForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activeDepPm.name });
+              }
+              if (activeWithPm) {
+                setWithdrawalForm(prev => prev.paymentMethod ? prev : { ...prev, paymentMethod: activeWithPm.name });
               }
             }
           });
@@ -912,35 +941,45 @@ export default function App() {
             snap.forEach(d => {
               list.push(d.data() as SportCoupon);
             });
-            if (list.length > 0) {
-              if (!isFirstCouponsLoadRef.current) {
-                list.forEach(c => {
-                  const currentCount = c.matches ? c.matches.length : 0;
-                  const prevCount = notifiedCouponsRef.current[c.id] ?? 0;
-                  if (currentCount > 0 && prevCount === 0) {
-                    const couponLabel = c.id === 'secured' ? 'COUPON CÔTE 2' : c.id === 'medium' ? 'COUPON CÔTE 5' : 'COUPON CÔTE 10';
-                    const notifTitle = `Nouveau coupon de Côte disponible ! ⚽`;
-                    const notifBody = `Le ${couponLabel || c.title} a été mis en ligne avec succès ! Cliquez pour voir les pronostics. 🔥`;
-
-                    playChimeNotification();
-                    triggerNativeNotification(notifTitle, notifBody, '/?tab=pronos');
-                    addInAppNotification(notifTitle, notifBody, 'success');
-                    showToast(notifBody, 'success');
-                  }
-                });
-              }
-
-              // Update the trackers
-              const updatedTrackers: Record<string, number> = { ...notifiedCouponsRef.current };
+            
+            if (list.length > 0 && !isFirstCouponsLoadRef.current) {
               list.forEach(c => {
-                updatedTrackers[c.id] = c.matches ? c.matches.length : 0;
-              });
-              notifiedCouponsRef.current = updatedTrackers;
-              localStorage.setItem('starbetpay_notified_coupons_matches', JSON.stringify(updatedTrackers));
-              isFirstCouponsLoadRef.current = false;
+                const currentCount = c.matches ? c.matches.length : 0;
+                const prevCount = notifiedCouponsRef.current[c.id] ?? 0;
+                if (currentCount > 0 && prevCount === 0) {
+                  const couponLabel = c.id === 'secured' ? 'COUPON CÔTE 2' : c.id === 'medium' ? 'COUPON CÔTE 5' : 'COUPON CÔTE 10';
+                  const notifTitle = `Nouveau coupon de Côte disponible ! ⚽`;
+                  const notifBody = `Le ${couponLabel || c.title} a été mis en ligne avec succès ! Cliquez pour voir les pronostics. 🔥`;
 
-              setCoupons(list);
+                  playChimeNotification();
+                  triggerNativeNotification(notifTitle, notifBody, '/?tab=pronos');
+                  addInAppNotification(notifTitle, notifBody, 'success');
+                  showToast(notifBody, 'success');
+                }
+              });
             }
+
+            // Update the trackers
+            const updatedTrackers: Record<string, number> = { ...notifiedCouponsRef.current };
+            list.forEach(c => {
+              updatedTrackers[c.id] = c.matches ? c.matches.length : 0;
+            });
+            notifiedCouponsRef.current = updatedTrackers;
+            localStorage.setItem('starbetpay_notified_coupons_matches', JSON.stringify(updatedTrackers));
+            isFirstCouponsLoadRef.current = false;
+
+            setCoupons(list);
+          });
+
+          // Listen to validated past coupons in real time for clients
+          const qPastCouponsClient = collection(db, 'pastCoupons');
+          unsubscribePastCoupons = onSnapshot(qPastCouponsClient, (snap) => {
+            const list: SportCoupon[] = [];
+            snap.forEach(d => {
+              list.push(d.data() as SportCoupon);
+            });
+            const sortedPast = list.sort((a, b) => b.id.localeCompare(a.id));
+            setPastCoupons(sortedPast);
           });
 
           // Listen to active user stats
@@ -956,8 +995,8 @@ export default function App() {
                   prev.role === freshUser.role &&
                   Number(prev.balanceCommission) === Number(freshUser.balanceCommission) &&
                   Number(prev.balanceCommissionWithdrawn) === Number(freshUser.balanceCommissionWithdrawn) &&
-                  prev.mfaEnabled === freshUser.mfaEnabled &&
-                  prev.authUid === freshUser.authUid
+                    prev.mfaEnabled === freshUser.mfaEnabled &&
+                    prev.authUid === freshUser.authUid
                 ) {
                   return prev;
                 }
@@ -1043,6 +1082,8 @@ export default function App() {
               isFirstCouponsLoadRef.current = false;
             }
             setCoupons(freshCoupons);
+            const freshPastCoupons = await dbService.getPastCoupons();
+            setPastCoupons(freshPastCoupons);
           } catch (e) {
             console.warn('Client background sync loop issue:', e);
           }
@@ -1057,6 +1098,7 @@ export default function App() {
       if (unsubscribeUsers) unsubscribeUsers();
       if (unsubscribeConfig) unsubscribeConfig();
       if (unsubscribeCoupons) unsubscribeCoupons();
+      if (unsubscribePastCoupons) unsubscribePastCoupons();
       if (unsubscribePaymentMethods) unsubscribePaymentMethods();
       if (unsubscribeUserStats) unsubscribeUserStats();
       if (unsubscribeRefs) unsubscribeRefs();
@@ -1179,6 +1221,33 @@ export default function App() {
       }
     } catch (err: any) {
       setAuthError(err.message || 'Une erreur de connexion est survenue. Veuillez vérifier votre réseau.');
+    } finally {
+      setIsAuthLoading(false);
+    }
+  };
+
+  const handleForgotPassword = async () => {
+    if (isAuthLoading) return;
+    setAuthError('');
+    setAuthSuccess('');
+    
+    const emailToReset = authForm.phone.trim();
+    if (!emailToReset) {
+      setAuthError("Veuillez saisir votre adresse e-mail dans le champ 'Adresse E-mail' ci-dessus pour recevoir le lien de réinitialisation.");
+      return;
+    }
+    
+    if (!emailToReset.includes('@')) {
+      setAuthError("Veuillez saisir une adresse e-mail valide.");
+      return;
+    }
+    
+    setIsAuthLoading(true);
+    try {
+      await dbService.sendPasswordReset(emailToReset);
+      setAuthSuccess(`Un email de réinitialisation de mot de passe a été envoyé à ${emailToReset}. Veuillez vérifier vos spams s'il n'apparaît pas.`);
+    } catch (err: any) {
+      setAuthError(err.message || "Erreur lors de l'envoi du lien de réinitialisation. Veuillez réessayer.");
     } finally {
       setIsAuthLoading(false);
     }
@@ -1341,7 +1410,7 @@ export default function App() {
       });
 
       setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
-      setDepositForm({ xbetAccount: '', amount: '', paymentMethod: paymentMethods[0]?.name || '' });
+      setDepositForm({ xbetAccount: '', amount: '', paymentMethod: paymentMethods.filter(p => p.active && p.allowDeposit !== false)[0]?.name || '' });
       setScreenshotBase64('');
       fetchClientUserData(user!.phone);
     } catch (e: any) {
@@ -1402,7 +1471,7 @@ export default function App() {
       });
 
       setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
-      setWithdrawalForm({ amount: '', withdrawCode: '', paymentMethod: paymentMethods[0]?.name || '', paymentNumber: '' });
+      setWithdrawalForm({ amount: '', withdrawCode: '', paymentMethod: paymentMethods.filter(p => p.active && p.allowWithdrawal !== false)[0]?.name || '', paymentNumber: '' });
       fetchClientUserData(user!.phone);
     } catch (e: any) {
       setFormMsg({ type: 'error', text: e.message || 'Une erreur est survenue lors de la validation.' });
@@ -1478,7 +1547,7 @@ export default function App() {
     }
   };
 
-  // Action: Admin adds a new payment method
+  // Action: Admin adds or edits a payment method
   const handleAddPaymentMethod = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!paymentMethodForm.name || !paymentMethodForm.number) {
@@ -1487,14 +1556,81 @@ export default function App() {
     }
 
     try {
-      const pms = await dbService.addOrUpdatePaymentMethod(paymentMethodForm.name, paymentMethodForm.number);
+      const pms = await dbService.addOrUpdatePaymentMethod(
+        paymentMethodForm.name.trim().toUpperCase(),
+        paymentMethodForm.number.trim(),
+        paymentMethodForm.allowDeposit,
+        paymentMethodForm.allowWithdrawal,
+        paymentMethodForm.isEditing ? paymentMethodForm.previousName : undefined
+      );
       setPaymentMethods(pms);
-      setPaymentMethodForm({ name: '', number: '' });
-      showToast('Nouveau moyen de de paiement enregistré. 💳', 'success');
+      setPaymentMethodForm({ 
+        name: '', 
+        number: '', 
+        allowDeposit: true, 
+        allowWithdrawal: true, 
+        isEditing: false, 
+        previousName: '' 
+      });
+      showToast(
+        paymentMethodForm.isEditing 
+          ? 'Moyen de paiement mis à jour avec succès. 💳' 
+          : 'Nouveau moyen de de paiement enregistré. 💳', 
+        'success'
+      );
     } catch (e: any) {
       console.error(e);
       showToast(e.message || "Erreur lors de l'enregistrement.", 'error');
     }
+  };
+
+  // Action: Admin deletes a payment method
+  const handleDeletePaymentMethod = async (name: string) => {
+    if (!window.confirm(`Êtes-vous sûr de vouloir supprimer définitivement le moyen de paiement "${name}" ?`)) {
+      return;
+    }
+    try {
+      const pms = await dbService.deletePaymentMethod(name);
+      setPaymentMethods(pms);
+      showToast('Moyen de paiement supprimé. 🗑️', 'success');
+      if (paymentMethodForm.isEditing && paymentMethodForm.previousName === name) {
+        setPaymentMethodForm({
+          name: '',
+          number: '',
+          allowDeposit: true,
+          allowWithdrawal: true,
+          isEditing: false,
+          previousName: ''
+        });
+      }
+    } catch (e: any) {
+      console.error(e);
+      showToast(e.message || "Erreur lors de la suppression.", 'error');
+    }
+  };
+
+  // Action: Set payment form to edit mode
+  const handleEditPaymentMethod = (pm: PaymentMethod) => {
+    setPaymentMethodForm({
+      name: pm.name,
+      number: pm.number,
+      allowDeposit: pm.allowDeposit !== false,
+      allowWithdrawal: pm.allowWithdrawal !== false,
+      isEditing: true,
+      previousName: pm.name
+    });
+    showToast(`Édition de ${pm.name}. Modifiez les informations ci-dessous.`, 'info');
+  };
+
+  const handleCancelEditPaymentMethod = () => {
+    setPaymentMethodForm({
+      name: '',
+      number: '',
+      allowDeposit: true,
+      allowWithdrawal: true,
+      isEditing: false,
+      previousName: ''
+    });
   };
 
   // Action: Toggle payment method active/inactive
@@ -1530,6 +1666,8 @@ export default function App() {
         status: m.status || 'pending'
       }));
 
+      const todayString = new Date().toLocaleDateString('fr-FR');
+
       // 1. Update the live active daily coupon so users can access/purchase it
       const updatedCoupons = await dbService.updateCoupon({
         id: couponEditForm.id,
@@ -1537,26 +1675,12 @@ export default function App() {
         confidence: couponEditForm.confidence,
         totalCote: Number(couponEditForm.totalCote),
         status: couponEditForm.status || 'pending',
-        matches: formattedMatches
-      });
-      setCoupons(updatedCoupons);
-
-      // 2. Automatically create and append a copy of this coupon straight to the archives with today's date
-      const todayString = new Date().toLocaleDateString('fr-FR');
-      const uniqueHistoryId = `${couponEditForm.id}_${Date.now()}`;
-      
-      const updatedHistory = await dbService.addPastCoupon({
-        id: uniqueHistoryId,
-        title: couponEditForm.title.trim(),
-        confidence: couponEditForm.confidence,
-        totalCote: Number(couponEditForm.totalCote),
-        status: couponEditForm.status || 'pending',
         matches: formattedMatches,
         date: todayString
       });
-      setPastCoupons(updatedHistory);
+      setCoupons(updatedCoupons);
 
-      // 3. Reset form fields completely to pristine empty state as requested
+      // 2. Reset form fields completely to pristine empty state as requested
       setCouponEditForm({
         id: '',
         title: '',
@@ -1812,7 +1936,7 @@ export default function App() {
                 <>
                   {/* Click outside backdrop */}
                   <div className="fixed inset-0 z-40" onClick={() => setShowNotificationCenter(false)} />
-                  <div className="absolute right-0 mt-2 w-80 bg-[#101b35] border border-cyan-500/20 rounded-2xl shadow-xl shadow-black/80 p-4 z-50 animate-fade-in text-gray-100 max-h-[420px] overflow-y-auto">
+                  <div className="fixed top-16 right-4 left-4 sm:absolute sm:top-auto sm:right-0 sm:left-auto sm:w-80 sm:mt-2 bg-[#101b35] border border-cyan-500/20 rounded-2xl shadow-xl shadow-black/80 p-4 z-50 animate-fade-in text-gray-100 max-h-[420px] overflow-y-auto">
                     <div className="flex items-center justify-between border-b border-cyan-500/10 pb-2 mb-3">
                       <div className="flex items-center gap-1.5">
                         <Bell size={14} className="text-cyan-400" />
@@ -2025,7 +2149,19 @@ export default function App() {
                   </div>
 
                   <div>
-                    <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-1">Mot de passe</label>
+                    <div className="flex justify-between items-center mb-1">
+                      <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold">Mot de passe</label>
+                      {authTab === 'login' && (
+                        <button 
+                          type="button"
+                          onClick={handleForgotPassword}
+                          className="text-[11px] text-cyan-400 hover:text-cyan-300 transition-colors font-semibold cursor-pointer"
+                          disabled={isAuthLoading}
+                        >
+                          Mot de passe oublié ?
+                        </button>
+                      )}
+                    </div>
                     <input 
                       type="password" 
                       placeholder="••••••••"
@@ -2462,7 +2598,7 @@ export default function App() {
                         <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-2">Moyen de paiement</label>
                         
                         <div className="grid grid-cols-2 gap-3 mb-4">
-                          {paymentMethods.filter(p => p.active).map((pm) => (
+                          {paymentMethods.filter(p => p.active && p.allowDeposit !== false).map((pm) => (
                             <button
                               key={pm.name}
                               type="button"
@@ -2669,8 +2805,10 @@ export default function App() {
 
                   const hasPremiumAccess = userTodayDeposits >= 1000 || user?.role === 'admin';
 
-                  const totalPastCount = pastCoupons.length;
-                  const wonPastCount = pastCoupons.filter(c => c.status === 'won').length;
+                  // Filter past coupons to validated ones only
+                  const validatedPastCoupons = pastCoupons.filter(c => c.status === 'won' || c.status === 'lost');
+                  const totalPastCount = validatedPastCoupons.length;
+                  const wonPastCount = validatedPastCoupons.filter(c => c.status === 'won').length;
                   const successRate = totalPastCount > 0 ? Math.round((wonPastCount / totalPastCount) * 100) : 85;
 
                   // Order coupons so Cote 2 (secured) is on top, then Cote 5 (medium), then Cote 10 (bold)
@@ -2681,8 +2819,12 @@ export default function App() {
                     return orderA - orderB;
                   });
 
+                  // Display coupons in Coupons du Jour list ONLY if published/updated today!
                   const availableCoupons = sortedCoupons.filter(c => {
-                    return c.matches && c.matches.length > 0;
+                    if (!c.matches || c.matches.length === 0) return false;
+                    if (!c.date) return false;
+                    const normalizedCouponDate = normalizeToISODate(c.date);
+                    return normalizedCouponDate === normalizedToday;
                   });
 
                   return (
@@ -2705,7 +2847,7 @@ export default function App() {
                           { id: 'medium', name: 'Côte 5 Médium', color: 'amber', rate: 82 },
                           { id: 'bold', name: 'Côte 10 Audacieux', color: 'pink', rate: 75 }
                         ].map((cat) => {
-                          const catPast = pastCoupons.filter(c => c.id.startsWith(cat.id) || (cat.id === 'secured' && c.totalCote < 3.5) || (cat.id === 'medium' && c.totalCote >= 3.5 && c.totalCote < 7.5) || (cat.id === 'bold' && c.totalCote >= 7.5));
+                          const catPast = validatedPastCoupons.filter(c => c.id.startsWith(cat.id) || (cat.id === 'secured' && c.totalCote < 3.5) || (cat.id === 'medium' && c.totalCote >= 3.5 && c.totalCote < 7.5) || (cat.id === 'bold' && c.totalCote >= 7.5));
                           const total = catPast.length;
                           const won = catPast.filter(c => c.status === 'won').length;
                           const rateOfCat = total > 0 ? Math.round((won / total) * 100) : cat.rate;
@@ -2931,48 +3073,58 @@ export default function App() {
                           <span className="text-[10px] text-emerald-400 font-bold bg-emerald-500/10 px-2 py-0.5 rounded">Vérifié</span>
                         </h4>
                         
-                        {pastCoupons.length === 0 ? (
-                          <div className="bg-[#111a33]/50 border border-slate-800 rounded-2xl p-4 text-center text-[11px] text-gray-400">
-                            Aucun historique de coupon archivé pour le moment.
-                          </div>
-                        ) : (
-                          <div className="space-y-3">
-                            {pastCoupons.slice(0, 5).map((coup, idx) => (
-                              <div key={coup.id || idx} className="bg-gradient-to-b from-[#111c38]/40 to-[#0c1224]/30 border border-slate-800/80 rounded-2xl p-4">
-                                <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800/40">
-                                  <div>
-                                    <span className="text-[10px] font-extrabold text-gray-200 block">{coup.title}</span>
-                                    <span className="text-[9px] text-gray-500 font-mono">{coup.date || 'Archives'}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs font-mono font-bold text-gray-300 bg-slate-800/80 px-2 py-0.5 rounded">Cote {coup.totalCote.toFixed(2)}</span>
-                                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
-                                      coup.status === 'won' 
-                                        ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
-                                        : coup.status === 'lost'
-                                          ? 'bg-red-500/15 text-red-500 border border-red-500/25'
-                                          : 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/25 font-black uppercase'
-                                    }`}>
-                                      {coup.status === 'won' ? 'GAGNÉ ✓' : coup.status === 'lost' ? 'PERDU ✗' : 'EN COURS ⏳'}
-                                    </span>
-                                  </div>
-                                </div>
-                                <div className="space-y-1.5 opacity-80">
-                                  {coup.matches.map((item, matchIdx) => (
-                                    <div key={matchIdx} className="flex justify-between items-center text-[10px]">
-                                      <span className="text-gray-300">{item.homeTeam} vs {item.awayTeam}</span>
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-gray-400 italic">{item.prediction} (Cote : {item.odd.toFixed(2)})</span>
-                                        {item.status === 'won' && <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1 rounded">✓</span>}
-                                        {item.status === 'lost' && <span className="text-[8px] text-red-500 font-bold bg-red-500/10 px-1 rounded font-sans">✗</span>}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
+                        {(() => {
+                          const clientPastCoupons = pastCoupons
+                            .filter(coup => coup.status === 'won' || coup.status === 'lost')
+                            .slice(0, 10);
+
+                          if (clientPastCoupons.length === 0) {
+                            return (
+                              <div className="bg-[#111a33]/50 border border-slate-800 rounded-2xl p-4 text-center text-[11px] text-gray-400">
+                                Aucun historique de coupon archivé pour le moment.
                               </div>
-                            ))}
-                          </div>
-                        )}
+                            );
+                          }
+
+                          return (
+                            <div className="space-y-3">
+                              {clientPastCoupons.map((coup, idx) => (
+                                <div key={coup.id || idx} className="bg-gradient-to-b from-[#111c38]/40 to-[#0c1224]/30 border border-slate-800/80 rounded-2xl p-4">
+                                  <div className="flex justify-between items-center mb-2 pb-2 border-b border-slate-800/40">
+                                    <div>
+                                      <span className="text-[10px] font-extrabold text-gray-200 block">{coup.title}</span>
+                                      <span className="text-[9px] text-gray-500 font-mono">{coup.date || 'Archives'}</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-xs font-mono font-bold text-gray-300 bg-slate-800/80 px-2 py-0.5 rounded">Cote {coup.totalCote.toFixed(2)}</span>
+                                      <span className={`text-[9px] font-bold px-2 py-0.5 rounded ${
+                                        coup.status === 'won' 
+                                          ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30' 
+                                          : coup.status === 'lost'
+                                            ? 'bg-red-500/15 text-red-500 border border-red-500/25'
+                                            : 'bg-yellow-500/15 text-yellow-400 border border-yellow-500/25 font-black uppercase'
+                                      }`}>
+                                        {coup.status === 'won' ? 'GAGNÉ ✓' : coup.status === 'lost' ? 'PERDU ✗' : 'EN COURS ⏳'}
+                                      </span>
+                                    </div>
+                                  </div>
+                                  <div className="space-y-1.5 opacity-80">
+                                    {coup.matches.map((item, matchIdx) => (
+                                      <div key={matchIdx} className="flex justify-between items-center text-[10px]">
+                                        <span className="text-gray-300">{item.homeTeam} vs {item.awayTeam}</span>
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-gray-400 italic">{item.prediction} (Cote : {item.odd.toFixed(2)})</span>
+                                          {item.status === 'won' && <span className="text-[8px] text-emerald-400 font-bold bg-emerald-500/10 px-1 rounded">✓</span>}
+                                          {item.status === 'lost' && <span className="text-[8px] text-red-500 font-bold bg-red-500/10 px-1 rounded font-sans">✗</span>}
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          );
+                        })()}
                       </div>
 
                     </div>
@@ -3030,7 +3182,7 @@ export default function App() {
                         <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-2">Recevoir sur (Moyen de paiement)</label>
                         
                         <div className="grid grid-cols-2 gap-3 mb-4">
-                          {paymentMethods.filter(p => p.active).map((pm) => (
+                          {paymentMethods.filter(p => p.active && p.allowWithdrawal !== false).map((pm) => (
                             <button
                               key={pm.name}
                               type="button"
@@ -3101,7 +3253,7 @@ export default function App() {
                       </div>
                     ) : (
                       <div className="space-y-3">
-                        {transactions.map((tx) => (
+                        {transactions.slice(0, 10).map((tx) => (
                           <div 
                             key={tx.id} 
                             className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex justify-between items-start"
@@ -4837,31 +4989,85 @@ export default function App() {
                       <h4 className="text-xs font-extrabold font-display uppercase tracking-wider text-cyan-400">Moyens de paiement</h4>
                       
                       <div className="space-y-3">
-                        {paymentMethods.map((pmObj) => (
-                          <div key={pmObj.name} className="flex items-center justify-between bg-[#0d1326] p-3 rounded-2xl border border-slate-800 text-xs">
-                            <div>
-                              <p className="font-extrabold font-display text-white">{pmObj.name}</p>
-                              <p className="font-mono text-gray-400 text-[11px] mt-0.5">N° dépôt: {pmObj.number}</p>
+                        {paymentMethods.map((pmObj) => {
+                          const isDepositEnabled = pmObj.allowDeposit !== false;
+                          const isWithdrawalEnabled = pmObj.allowWithdrawal !== false;
+                          
+                          return (
+                            <div key={pmObj.name} className="flex flex-col gap-2 bg-[#0d1326] p-3.5 rounded-2xl border border-slate-800 text-xs shadow-md">
+                              <div className="flex items-start justify-between">
+                                <div className="space-y-1">
+                                  <p className="font-extrabold font-display text-white text-sm flex items-center gap-1.5">
+                                    {pmObj.name}
+                                  </p>
+                                  <p className="font-mono text-cyan-400 text-[11px] mt-0.5">
+                                    N° dépôt: <span className="text-white font-extrabold">{pmObj.number}</span>
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                                    {isDepositEnabled && (
+                                      <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-extrabold text-[9px] uppercase tracking-wider border border-emerald-500/20">
+                                        📥 Dépôt
+                                      </span>
+                                    )}
+                                    {isWithdrawalEnabled && (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-500 font-extrabold text-[9px] uppercase tracking-wider border border-amber-500/20">
+                                        📤 Retrait
+                                      </span>
+                                    )}
+                                    {!isDepositEnabled && !isWithdrawalEnabled && (
+                                      <span className="px-1.5 py-0.5 rounded bg-red-500/10 text-red-500 font-extrabold text-[9px] uppercase tracking-wider border border-red-500/20">
+                                        Désactivé partout
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                
+                                <div className="flex flex-col items-end gap-2 shrink-0">
+                                  {/* Active toggle */}
+                                  <div className="flex items-center gap-1.5">
+                                    <span className={`text-[10px] font-bold ${pmObj.active ? 'text-cyan-400' : 'text-gray-500'}`}>
+                                      {pmObj.active ? 'Actif' : 'Inactif'}
+                                    </span>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleTogglePaymentMethod(pmObj.name)}
+                                      className={`w-9 h-5 rounded-full p-0.5 transition-colors ${pmObj.active ? 'bg-cyan-500' : 'bg-slate-800'}`}
+                                    >
+                                      <div className={`w-4 h-4 rounded-full bg-slate-950 transition-transform ${pmObj.active ? 'translate-x-4' : 'translate-x-0'}`} />
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* CRUD Actions Panel */}
+                              <div className="pt-2 border-t border-slate-800/40 mt-1 flex justify-end gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditPaymentMethod(pmObj)}
+                                  className="px-2.5 py-1 text-[10px] font-extrabold text-cyan-400 hover:text-white bg-cyan-500/10 hover:bg-cyan-500/20 border border-cyan-500/20 rounded-xl transition-all flex items-center gap-1"
+                                >
+                                  <Edit size={11} /> Modifier
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeletePaymentMethod(pmObj.name)}
+                                  className="px-2.5 py-1 text-[10px] font-extrabold text-red-400 hover:text-white bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 rounded-xl transition-all flex items-center gap-1"
+                                >
+                                  <Trash2 size={11} /> Supprimer
+                                </button>
+                              </div>
                             </div>
-                            
-                            <div className="flex items-center gap-2">
-                              <span className={`text-[10px] font-bold ${pmObj.active ? 'text-cyan-400' : 'text-gray-500'}`}>{pmObj.active ? 'Actif' : 'Inactif'}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleTogglePaymentMethod(pmObj.name)}
-                                className={`w-9 h-5 rounded-full p-0.5 transition-colors ${pmObj.active ? 'bg-cyan-500' : 'bg-slate-800'}`}
-                              >
-                                <div className={`w-4 h-4 rounded-full bg-slate-950 transition-transform ${pmObj.active ? 'translate-x-4' : 'translate-x-0'}`} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
 
-                      {/* Add new pay channel form */}
-                      <form onSubmit={handleAddPaymentMethod} className="pt-3 border-t border-slate-800/60 space-y-3">
-                        <span className="block text-[10px] font-bold text-gray-300 uppercase tracking-wider">Ajouter un nouveau moyen</span>
+                      {/* Add/Edit pay channel form */}
+                      <form onSubmit={handleAddPaymentMethod} className="pt-4 border-t border-slate-800/60 space-y-3.5">
+                        <span className="block text-[10px] font-bold text-cyan-400 uppercase tracking-wider">
+                          {paymentMethodForm.isEditing ? `Modifier : ${paymentMethodForm.previousName}` : 'Ajouter un nouveau moyen'}
+                        </span>
                         <div>
+                          <label className="block text-gray-400 text-[9px] uppercase tracking-wider font-semibold mb-1">Nom du canal (ex : MOOV, MTN)</label>
                           <input 
                             type="text" 
                             placeholder="Nom (ex : MOOV)" 
@@ -4871,22 +5077,60 @@ export default function App() {
                           />
                         </div>
                         <div>
+                          <label className="block text-gray-400 text-[9px] uppercase tracking-wider font-semibold mb-1">Numéro de dépôt</label>
                           <input 
                             type="text" 
-                            placeholder="Numéro de dépôt" 
+                            placeholder="Numéro de dépôt ou coordonnées" 
                             className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white text-mono"
                             value={paymentMethodForm.number}
                             onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, number: e.target.value })}
                           />
                         </div>
-                        <button
-                          type="submit"
-                          className="w-full py-2 bg-[#1b2b52] hover:bg-[#203666] text-white font-bold text-xs rounded-xl transition-all"
-                        >
-                          + Ajouter
-                        </button>
-                      </form>
 
+                        {/* Checkboxes to categorize deposit / withdrawal permissions */}
+                        <div className="flex flex-col gap-2 pt-1">
+                          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                            <input 
+                              type="checkbox" 
+                              className="rounded bg-[#0d1326] border-slate-800 text-cyan-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer"
+                              checked={paymentMethodForm.allowDeposit}
+                              onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, allowDeposit: e.target.checked })}
+                            />
+                            <span>Autoriser pour les dépôts (Dépôt)</span>
+                          </label>
+                          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                            <input 
+                              type="checkbox" 
+                              className="rounded bg-[#0d1326] border-slate-800 text-cyan-500 focus:ring-0 focus:ring-offset-0 w-4 h-4 cursor-pointer"
+                              checked={paymentMethodForm.allowWithdrawal}
+                              onChange={(e) => setPaymentMethodForm({ ...paymentMethodForm, allowWithdrawal: e.target.checked })}
+                            />
+                            <span>Autoriser pour les retraits (Retrait)</span>
+                          </label>
+                        </div>
+
+                        <div className="flex gap-2 pt-1">
+                          {paymentMethodForm.isEditing && (
+                            <button
+                              type="button"
+                              onClick={handleCancelEditPaymentMethod}
+                              className="w-1/2 py-2 bg-slate-800 hover:bg-slate-750 text-white font-bold text-xs rounded-xl transition-all border border-slate-700"
+                            >
+                              Annuler
+                            </button>
+                          )}
+                          <button
+                            type="submit"
+                            className={`py-2 text-slate-950 font-extrabold text-xs transition-all ${
+                              paymentMethodForm.isEditing 
+                                ? 'w-1/2 bg-cyan-500 hover:bg-cyan-400' 
+                                : 'w-full bg-cyan-500 hover:bg-cyan-400'
+                            }`}
+                          >
+                            {paymentMethodForm.isEditing ? 'Enregistrer' : '+ Ajouter'}
+                          </button>
+                        </div>
+                      </form>
                     </div>
 
                   </div>

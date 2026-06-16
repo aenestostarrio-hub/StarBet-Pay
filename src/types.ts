@@ -33,6 +33,8 @@ export interface PaymentMethod {
   name: string;
   number: string;
   active: boolean;
+  allowDeposit?: boolean;
+  allowWithdrawal?: boolean;
 }
 
 export interface AppConfig {
