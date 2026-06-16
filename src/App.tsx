@@ -502,10 +502,7 @@ export default function App() {
   const fetchClientUserData = async (phone: string) => {
     try {
       const txData = await dbService.getTransactions(phone);
-      setTransactions(txData);
-      
-      // Seed the known transaction state to prevent false alarms on historic list
-      txData.forEach(tx => knownTxIdsRef.current.add(tx.id));
+      processClientTransactionsUpdate(txData);
 
       const statsData = await dbService.getUserStats(phone);
       setRefStats(statsData);
@@ -650,6 +647,109 @@ export default function App() {
     return () => unsubscribe();
   }, [user]);
 
+  const triggerNativeNotification = (title: string, body: string, dataUrl: string = '/') => {
+    try {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.ready.then((reg) => {
+            reg.showNotification(title, {
+              body,
+              icon: "/starbetpay_icon.jpg",
+              badge: "/starbetpay_icon.jpg",
+              vibrate: [150, 100, 150],
+              tag: 'starbetpay-notif-' + Date.now(),
+              renotify: true,
+              data: {
+                url: dataUrl
+              }
+            } as any);
+          }).catch((err) => {
+            console.warn("ServiceWorker push fallback:", err);
+            new Notification(title, {
+              body,
+              icon: "/starbetpay_icon.jpg",
+              data: {
+                url: dataUrl
+              }
+            } as any);
+          });
+        } else {
+          new Notification(title, {
+            body,
+            icon: "/starbetpay_icon.jpg",
+            data: {
+              url: dataUrl
+            }
+          } as any);
+        }
+      }
+    } catch (e) {
+      console.warn("Native desktop notification helper:", e);
+    }
+  };
+
+  const processClientTransactionsUpdate = (freshTxs: DBTransaction[]) => {
+    const sortedTxs = [...freshTxs].sort((a, b) => b.id.localeCompare(a.id));
+
+    // Retrieve or initialize local notification tracker
+    const notifiedStatuses = (() => {
+      try {
+        return JSON.parse(localStorage.getItem('starbetpay_notified_tx_statuses') || '{}');
+      } catch {
+        return {};
+      }
+    })();
+
+    let trackerUpdated = false;
+
+    sortedTxs.forEach(tx => {
+      let trackedStatus = notifiedStatuses[tx.id];
+
+      // If we don't have this tracked and it's 'pending', initialize it so we monitor its transition
+      if (!trackedStatus && tx.status === 'pending') {
+        notifiedStatuses[tx.id] = 'pending';
+        trackedStatus = 'pending';
+        trackerUpdated = true;
+      }
+
+      // If we know about this pending transaction, and it has transitioned to another status
+      if (trackedStatus === 'pending' && tx.status !== 'pending') {
+        const txTimestamp = Number(tx.id.replace('TX_', ''));
+        const isRecent = !isNaN(txTimestamp) && (Date.now() - txTimestamp < 7 * 24 * 60 * 60 * 1000); // 7 days
+
+        if (isRecent) {
+          const opLabel = tx.type === 'deposit' ? 'Dépôt' : 'Retrait';
+          if (tx.status === 'validated') {
+            playChimeNotification();
+            const text = `Félicitations ! Votre demande de ${opLabel} de ${tx.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
+            showToast(text, 'success');
+            triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
+            addInAppNotification("Opération Validée 🎉", text, 'success');
+          } else if (tx.status === 'rejected') {
+            playChimeNotification();
+            const text = `Votre demande de ${opLabel} de ${tx.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${tx.rejectionReason || 'Non spécifié'}`;
+            showToast(text, 'error');
+            triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
+            addInAppNotification("Opération Refusée ❌", text, 'error');
+          }
+        }
+
+        notifiedStatuses[tx.id] = tx.status;
+        trackerUpdated = true;
+      }
+    });
+
+    if (trackerUpdated) {
+      try {
+        localStorage.setItem('starbetpay_notified_tx_statuses', JSON.stringify(notifiedStatuses));
+      } catch (e) {
+        console.warn("Could not save transaction status notifications:", e);
+      }
+    }
+
+    setTransactions(sortedTxs);
+  };
+
   // Establish Real-Time or Polling notifications for administrators & clients
   useEffect(() => {
     let eventSource: EventSource | null = null;
@@ -662,47 +762,6 @@ export default function App() {
     let unsubscribePaymentMethods: (() => void) | null = null;
     let unsubscribeUserStats: (() => void) | null = null;
     let unsubscribeRefs: (() => void) | null = null;
-
-    const triggerNativeNotification = (title: string, body: string, dataUrl: string = '/') => {
-      try {
-        if ('Notification' in window && Notification.permission === 'granted') {
-          if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.ready.then((reg) => {
-              reg.showNotification(title, {
-                body,
-                icon: "/starbetpay_icon.jpg",
-                badge: "/starbetpay_icon.jpg",
-                vibrate: [150, 100, 150],
-                tag: 'starbetpay-notif-' + Date.now(),
-                renotify: true,
-                data: {
-                  url: dataUrl
-                }
-              } as any);
-            }).catch((err) => {
-              console.warn("ServiceWorker push fallback:", err);
-              new Notification(title, {
-                body,
-                icon: "/starbetpay_icon.jpg",
-                data: {
-                  url: dataUrl
-                }
-              } as any);
-            });
-          } else {
-            new Notification(title, {
-              body,
-              icon: "/starbetpay_icon.jpg",
-              data: {
-                url: dataUrl
-              }
-            } as any);
-          }
-        }
-      } catch (e) {
-        console.warn("Native desktop notification helper:", e);
-      }
-    };
 
     if (!user) {
       knownTxIdsRef.current.clear();
@@ -879,29 +938,7 @@ export default function App() {
             snapshot.forEach((docSnap) => {
               freshTxs.push(docSnap.data() as DBTransaction);
             });
-            const sortedTxs = freshTxs.sort((a, b) => b.id.localeCompare(a.id));
-
-            // Detect status transitions (pending -> validated/rejected)
-            transactionsRef.current.forEach(oldTx => {
-              const correspondingFresh = sortedTxs.find(f => f.id === oldTx.id);
-              if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
-                if (correspondingFresh.status === 'validated') {
-                  playChimeNotification();
-                  const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
-                  showToast(text, 'success');
-                  triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
-                  addInAppNotification("Opération Validée 🎉", text, 'success');
-                } else if (correspondingFresh.status === 'rejected') {
-                  playChimeNotification();
-                  const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
-                  showToast(text, 'error');
-                  triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
-                  addInAppNotification("Opération Refusée ❌", text, 'error');
-                }
-              }
-            });
-
-            setTransactions(sortedTxs);
+            processClientTransactionsUpdate(freshTxs);
           }, (err) => {
             console.warn("Client transactions listener failed (switching to fallback):", err);
           });
@@ -1032,26 +1069,7 @@ export default function App() {
         pollInterval = setInterval(async () => {
           try {
             const freshTxs = await dbService.getTransactions(user.phone);
-            transactionsRef.current.forEach(oldTx => {
-              const correspondingFresh = freshTxs.find(f => f.id === oldTx.id);
-              if (correspondingFresh && oldTx.status === 'pending' && correspondingFresh.status !== 'pending') {
-                if (correspondingFresh.status === 'validated') {
-                  playChimeNotification();
-                  const text = `Félicitations ! Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été VALIDÉE. 🎉`;
-                  showToast(text, 'success');
-                  triggerNativeNotification("StarBetPay - Opération Validée 🎉", text);
-                  addInAppNotification("Opération Validée 🎉", text, 'success');
-                } else if (correspondingFresh.status === 'rejected') {
-                  playChimeNotification();
-                  const text = `Votre demande de ${correspondingFresh.amount.toLocaleString()} FCFA a été ANNULÉE / REJETÉE : ${correspondingFresh.rejectionReason || 'Non specifié'}`;
-                  showToast(text, 'error');
-                  triggerNativeNotification("StarBetPay - Opération Refusée ❌", text);
-                  addInAppNotification("Opération Refusée ❌", text, 'error');
-                }
-              }
-            });
-
-            setTransactions(freshTxs);
+            processClientTransactionsUpdate(freshTxs);
             const freshStats = await dbService.getUserStats(user.phone);
             setRefStats(freshStats);
             const freshCoupons = await dbService.getCoupons();
@@ -1409,6 +1427,15 @@ export default function App() {
         screenshot: screenshotBase64
       });
 
+      // Track this new transaction as pending in localStorage for transition notifications
+      try {
+        const notified = JSON.parse(localStorage.getItem('starbetpay_notified_tx_statuses') || '{}');
+        notified[transaction.id] = 'pending';
+        localStorage.setItem('starbetpay_notified_tx_statuses', JSON.stringify(notified));
+      } catch (err) {
+        console.warn("Error tracking initial pending status:", err);
+      }
+
       setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
       setDepositForm({ xbetAccount: '', amount: '', paymentMethod: paymentMethods.filter(p => p.active && p.allowDeposit !== false)[0]?.name || '' });
       setScreenshotBase64('');
@@ -1469,6 +1496,15 @@ export default function App() {
         paymentNumber: withdrawalForm.paymentNumber,
         withdrawCode: withdrawalForm.withdrawCode
       });
+
+      // Track this new transaction as pending in localStorage for transition notifications
+      try {
+        const notified = JSON.parse(localStorage.getItem('starbetpay_notified_tx_statuses') || '{}');
+        notified[transaction.id] = 'pending';
+        localStorage.setItem('starbetpay_notified_tx_statuses', JSON.stringify(notified));
+      } catch (err) {
+        console.warn("Error tracking initial pending status:", err);
+      }
 
       setFormMsg({ type: 'success', text: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.' });
       setWithdrawalForm({ amount: '', withdrawCode: '', paymentMethod: paymentMethods.filter(p => p.active && p.allowWithdrawal !== false)[0]?.name || '', paymentNumber: '' });
