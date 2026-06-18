@@ -1458,6 +1458,16 @@ export const dbService = {
       };
 
       await setDoc(doc(db, 'transactions', txId), newTx);
+
+      // Trigger Telegram Notification via background api
+      fetch('/api/telegram/notify-new-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tx: newTx })
+      }).catch(err => {
+        console.warn('[Telegram Background Dispatch Error]:', err);
+      });
+
       return newTx;
     } catch (e) {
       if (isOfflineOrError(e)) {
@@ -1477,6 +1487,16 @@ export const dbService = {
         if (!ldb.transactions) ldb.transactions = [];
         ldb.transactions.push(newTx);
         saveLocalDB(ldb);
+
+        // Trigger Telegram Notification via background api
+        fetch('/api/telegram/notify-new-transaction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tx: newTx })
+        }).catch(err => {
+          console.warn('[Telegram Background Dispatch Error - Fallback]:', err);
+        });
+
         return newTx;
       }
       handleFirestoreError(e, OperationType.WRITE, `transactions`);

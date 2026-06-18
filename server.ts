@@ -597,6 +597,36 @@ async function startServer() {
     }
   });
 
+  // Telegram Bot integration for new deposit & withdrawal requests
+  app.post('/api/telegram/notify-new-transaction', async (req, res) => {
+    const { tx } = req.body;
+    if (!tx) {
+      return res.status(400).json({ error: 'Données de la transaction requises' });
+    }
+
+    try {
+      const isDeposit = tx.type === 'deposit';
+      const typeLabel = isDeposit ? '🟢 DEMANDE DE DÉPÔT' : '🔴 DEMANDE DE RETRAIT';
+      
+      const tgMsg = `<b>📥 NOUVELLE DEMANDE SUR STARBETPAY 📥</b>\n\n` +
+                    `<b>🔑 ID Transaction:</b> <code>${tx.id}</code>\n` +
+                    `<b>📊 Type:</b> ${typeLabel}\n` +
+                    `<b>👤 Client:</b> ${tx.userName || 'Client'} (${tx.userPhone})\n` +
+                    `<b>💰 Montant:</b> <code>${Number(tx.amount).toLocaleString('fr-FR')} FCFA</code>\n` +
+                    `<b>🎯 Compte 1xBet:</b> <code>${tx.xbetAccount || 'N/A'}</code>\n` +
+                    `<b>📲 Moyen de Paiement:</b> ${tx.paymentMethod || 'Manuel'} ${tx.paymentNumber ? `(${tx.paymentNumber})` : ''}\n` +
+                    (tx.withdrawCode ? `<b>🔑 Code de Retrait:</b> <code>${tx.withdrawCode}</code>\n` : '') +
+                    `<b>⏳ Statut:</b> En attente de validation\n` +
+                    `<b>⏱️ Reçu le:</b> ${tx.date || new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Dakar' })}`;
+
+      const success = await sendTelegramNotification(tgMsg);
+      return res.json({ success, message: success ? 'Notification Telegram envoyée avec succès !' : 'Échec de la notification' });
+    } catch (err: any) {
+      console.error('[Telegram API Notify Error]:', err);
+      return res.status(500).json({ error: err.message || err });
+    }
+  });
+
   // Payment configuration endpoints
   app.get('/api/config', (req, res) => {
     const db = getDB();
