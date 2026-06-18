@@ -4,7 +4,8 @@ import fs from 'fs';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
-import { DBState, DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './src/types';
+import { DBState, DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon, DBNotification, FCMToken } from './src/types';
+import admin from 'firebase-admin';
 
 dotenv.config();
 
@@ -123,7 +124,9 @@ const initialDB: DBState = {
     }
   ],
   couponHistory: [],
-  pastCoupons: []
+  pastCoupons: [],
+  notifications: [],
+  fcmTokens: []
 };
 
 // Database read/write utility
@@ -137,6 +140,12 @@ function getDB(): DBState {
     const parsed = JSON.parse(data) as DBState;
     if (!parsed.pastCoupons) {
       parsed.pastCoupons = [];
+    }
+    if (!parsed.notifications) {
+      parsed.notifications = [];
+    }
+    if (!parsed.fcmTokens) {
+      parsed.fcmTokens = [];
     }
     
     // Clean old/legacy coupons whose date isn't today
@@ -202,6 +211,133 @@ function saveDB(db: DBState) {
 
 // Admin notification subscribers (SSE)
 let adminSubscribers: express.Response[] = [];
+
+const firebaseAdmin: any = admin;
+
+// Firebase Admin SDK & FCM support
+let firebaseAdminApp: any = null;
+let isFcmReady = false;
+
+try {
+  const serviceAccountPath = process.env.GOOGLE_APPLICATION_CREDENTIALS || path.resolve(process.cwd(), 'firebase-service-account.json');
+  if (fs.existsSync(serviceAccountPath)) {
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    firebaseAdminApp = firebaseAdmin.initializeApp({
+      credential: firebaseAdmin.credential.cert(serviceAccount)
+    });
+    isFcmReady = true;
+    console.log('[Firebase Admin] Service Account loaded successfully.');
+  } else {
+    // Try native default initialization
+    firebaseAdminApp = firebaseAdmin.initializeApp();
+    isFcmReady = true;
+    console.log('[Firebase Admin] Default Application Credentials loaded loaded successfully.');
+  }
+} catch (e) {
+  console.warn('[Firebase Admin Setup Fallback] Web clients session active. Native status daemon initialized with local secure socket fallbacks.');
+}
+
+// Notification structure SSE socket array
+let notificationSubscribers: { phone: string; response: express.Response }[] = [];
+
+function broadcastNotification(notification: DBNotification) {
+  notificationSubscribers.forEach((sub) => {
+    if (sub.phone === notification.user_id || (notification.user_id === 'admin' && sub.phone === 'admin')) {
+      try {
+        sub.response.write(`data: ${JSON.stringify(notification)}\n\n`);
+      } catch (e) {}
+    }
+  });
+}
+
+// Unified push messaging logic targeting multiple device devices
+async function sendFcmNotification(phone: string, title: string, message: string, extraData: any = {}) {
+  if (!isFcmReady || !firebaseAdminApp) {
+    console.log(`[FCM Pipeline Bypass (Local Mode)] Recipient: ${phone} | Title: ${title} | Body: ${message}`);
+    return;
+  }
+  try {
+    const db = getDB();
+    const tokens = db.fcmTokens ? db.fcmTokens.filter(t => t.phone === phone) : [];
+    if (tokens.length === 0) {
+      console.log(`[FCM Service] No token matches found in registry mapped to: ${phone}`);
+      return;
+    }
+
+    const payload = tokens.map(async (tok) => {
+      try {
+        await firebaseAdmin.messaging(firebaseAdminApp).send({
+          token: tok.token,
+          notification: { title, body: message },
+          data: {
+            id: String(extraData.id || ''),
+            type: String(extraData.type || ''),
+            txId: String(extraData.txId || ''),
+            txType: String(extraData.txType || ''),
+            txStatus: String(extraData.txStatus || ''),
+            couponId: String(extraData.couponId || ''),
+            click_action: '/'
+          },
+          webpush: {
+            notification: {
+              icon: '/starbetpay_icon.jpg',
+              badge: '/starbetpay_icon.jpg'
+            }
+          }
+        });
+        console.log(`[FCM Service] Push dispatched successfully to tok ${tok.id}`);
+      } catch (tokenError: any) {
+        const erMsg = tokenError?.message || '';
+        if (erMsg.includes('registration-token-not-registered') || erMsg.includes('not-found') || erMsg.includes('invalid-registration-token')) {
+          console.log(`[FCM Autoclear] De-registering unresponsive client endpoint token: ${tok.id}`);
+          const curDb = getDB();
+          if (curDb.fcmTokens) {
+            curDb.fcmTokens = curDb.fcmTokens.filter(t => t.id !== tok.id);
+            saveDB(curDb);
+          }
+        }
+      }
+    });
+    await Promise.all(payload);
+  } catch (err) {
+    console.error('[FCM Engine Fail-safe Error]:', err);
+  }
+}
+
+// Unified Notification Factory
+function createNotification(user_id: string, title: string, message: string, type: string, extra: any = {}) {
+  const db = getDB();
+  if (!db.notifications) {
+    db.notifications = [];
+  }
+  
+  const notifId = 'NOTIF_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+  const newNotif: DBNotification = {
+    id: notifId,
+    user_id,
+    title,
+    message,
+    type,
+    is_read: false,
+    created_at: new Date().toISOString(),
+    ...extra
+  };
+
+  db.notifications.unshift(newNotif);
+  saveDB(db);
+
+  // Deliver immediately to listening active frontend SSE sockets of client
+  broadcastNotification(newNotif);
+
+  // Deliver as native persistent system alerts
+  sendFcmNotification(user_id, title, message, {
+    id: notifId,
+    type,
+    ...extra
+  });
+
+  return newNotif;
+}
 
 function notifyAdminsOfNewTransaction(tx: DBTransaction) {
   adminSubscribers.forEach((res) => {
@@ -500,6 +636,15 @@ async function startServer() {
     // Trigger notification to any admin connected via SSE
     notifyAdminsOfNewTransaction(newTx);
 
+    // Trigger persistent DB and Push Notification to Administration
+    createNotification(
+      'admin',
+      `Nouvelle demande de ${type === 'deposit' ? 'dépôt' : 'retrait'} 💸`,
+      `Client: ${user.name}\nMontant: ${Number(amount).toLocaleString()} FCFA\nHeure: ${newTx.date}`,
+      `${type}_request`,
+      { txId: newTx.id, txType: type, txStatus: 'pending' }
+    );
+
     res.json({ message: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.', transaction: newTx });
   });
 
@@ -560,6 +705,22 @@ async function startServer() {
     }
 
     saveDB(db);
+
+    // Notify client in real-time about validation/rejection outcome
+    const opLabel = tx.type === 'deposit' ? 'dépôt' : (tx.type === 'commission_payout' ? 'retrait de commission' : 'retrait');
+    const statusLabel = status === 'validated' ? 'VALIDÉE 🎉' : 'REJETÉE ❌';
+    const detailMsg = status === 'validated'
+      ? `Votre demande de ${opLabel} de ${tx.amount.toLocaleString()} FCFA a été validée avec succès !`
+      : `Votre demande de ${opLabel} de ${tx.amount.toLocaleString()} FCFA a été rejetée.${rejectionReason ? ` Motif: ${rejectionReason}` : ''}`;
+
+    createNotification(
+      tx.userPhone,
+      `Opération ${statusLabel}`,
+      detailMsg,
+      `${tx.type}_${status}`,
+      { txId: tx.id, txType: tx.type, txStatus: status }
+    );
+
     res.json({ message: `Transaction mise à jour en statut : ${status}`, transaction: tx });
   });
 
@@ -608,6 +769,15 @@ async function startServer() {
     db.transactions.unshift(newTx);
     saveDB(db);
     notifyAdminsOfNewTransaction(newTx);
+
+    // Trigger persistent DB and Push Notification to Administration for Commission Payouts
+    createNotification(
+      'admin',
+      'Demande de retrait de commissions 💰',
+      `Client: ${user.name}\nMontant: ${pullAmount.toLocaleString()} FCFA\nHeure: ${newTx.date}`,
+      'commission_request',
+      { txId: newTx.id, txType: 'commission_payout', txStatus: 'pending' }
+    );
 
     res.json({ message: 'Demande de retrait de gain effectuée avec succès.', user, transaction: newTx });
   });
@@ -697,6 +867,22 @@ async function startServer() {
         date: new Date().toLocaleDateString('fr-FR')
       };
       saveDB(db);
+
+      // Notify all users about un nouveau coupon mis en ligne
+      const couponTitle = title || db.coupons[couponIndex].title;
+      const couponCote = Number(totalCote) || db.coupons[couponIndex].totalCote;
+      
+      const allUsers = Object.keys(db.users).filter(phone => db.users[phone].role !== 'admin');
+      allUsers.forEach((userPhone) => {
+        createNotification(
+          userPhone,
+          `Nouveau Coupon disponible 🏆`,
+          `Un nouveau coupon (${couponTitle}) avec une cote de ${couponCote} est maintenant en ligne ! Profitez-en vite !`,
+          'new_coupon',
+          { couponId: id }
+        );
+      });
+
       return res.json({ message: "Coupon enregistré avec succès !", coupons: db.coupons });
     }
     res.status(404).json({ error: "Coupon non trouvé." });
@@ -757,6 +943,116 @@ async function startServer() {
     db.pastCoupons = [];
     saveDB(db);
     res.json({ message: "Historique réinitialisé avec succès !", pastCoupons: [] });
+  });
+
+  // ==========================================
+  // NOTIFICATIONS ENDPOINTS
+  // ==========================================
+
+  // Get notifications for a user (or admin)
+  app.get('/api/notifications', (req, res) => {
+    const { phone } = req.query;
+    if (!phone) {
+      return res.status(400).json({ error: 'phone query parameter required' });
+    }
+    const db = getDB();
+    const list = db.notifications || [];
+    const filtered = list.filter(n => n.user_id === phone);
+    res.json(filtered);
+  });
+
+  // Mark single or all notifications as read
+  app.post('/api/notifications/mark-read', (req, res) => {
+    const { id, phone } = req.body;
+    const db = getDB();
+    if (!db.notifications) db.notifications = [];
+
+    let count = 0;
+    db.notifications.forEach(n => {
+      if (id && n.id === id) {
+        if (!n.is_read) {
+          n.is_read = true;
+          count++;
+        }
+      } else if (!id && phone && n.user_id === phone) {
+        if (!n.is_read) {
+          n.is_read = true;
+          count++;
+        }
+      }
+    });
+
+    if (count > 0) {
+      saveDB(db);
+    }
+    res.json({ success: true, markedCount: count });
+  });
+
+  // Clear notifications for a user
+  app.post('/api/notifications/clear', (req, res) => {
+    const { phone } = req.body;
+    if (!phone) {
+      return res.status(400).json({ error: 'phone required' });
+    }
+    const db = getDB();
+    if (db.notifications) {
+      db.notifications = db.notifications.filter(n => n.user_id !== phone);
+      saveDB(db);
+    }
+    res.json({ success: true });
+  });
+
+  // Register an FCM Push Token
+  app.post('/api/fcm/register', (req, res) => {
+    const { phone, token } = req.body;
+    if (!phone || !token) {
+      return res.status(400).json({ error: 'phone and token are required' });
+    }
+    const db = getDB();
+    if (!db.fcmTokens) db.fcmTokens = [];
+
+    // Avoid duplicates
+    const index = db.fcmTokens.findIndex(t => t.token === token);
+    const now = new Date().toISOString();
+    if (index !== -1) {
+      db.fcmTokens[index].phone = phone;
+      db.fcmTokens[index].updatedAt = now;
+    } else {
+      const tokenId = 'TOK_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6);
+      const newToken: FCMToken = {
+        id: tokenId,
+        phone,
+        token,
+        updatedAt: now
+      };
+      db.fcmTokens.push(newToken);
+    }
+    saveDB(db);
+    res.json({ success: true });
+  });
+
+  // Server Sent Events (SSE) stream for user-specific real-time notifications
+  app.get('/api/notifications-sse', (req, res) => {
+    const { phone } = req.query;
+    if (!phone) {
+      return res.status(400).send('phone query parameter required');
+    }
+
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    const clientPhone = String(phone);
+    const entry = { phone: clientPhone, response: res };
+    notificationSubscribers.push(entry);
+
+    // Initial ping to establish connection
+    res.write('data: {"connected": true}\n\n');
+
+    req.on('close', () => {
+      notificationSubscribers = notificationSubscribers.filter(sub => sub.response !== res);
+    });
   });
 
   // Create a new customized coupon inside history

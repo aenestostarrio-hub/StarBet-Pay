@@ -86,29 +86,47 @@ self.addEventListener('message', (event) => {
 
 // Remote Push Notification Handler (FCM & Firebase Architecture support)
 self.addEventListener('push', (event) => {
-  let payload = {
-    title: 'StarBetPay 🌟',
-    body: 'Nouvelle notification importante de StarBetPay !',
-    icon: '/starbetpay_icon.jpg',
-    url: '/'
-  };
+  let title = 'StarBetPay 🌟';
+  let body = 'Nouvelle notification importante de StarBetPay !';
+  let data = { url: '/' };
 
   if (event.data) {
     try {
-      payload = { ...payload, ...event.data.json() };
+      const rawData = event.data.json();
+      console.log('[Service Worker] Push structured payload received:', rawData);
+      
+      // Support standard WebPush & FCM structures, both modular and nested
+      if (rawData.notification) {
+        title = rawData.notification.title || title;
+        body = rawData.notification.body || body;
+      } else if (rawData.title) {
+        title = rawData.title;
+        body = rawData.body || '';
+      }
+
+      // Merge and associate data payloads
+      const extraData = rawData.data || rawData;
+      if (extraData) {
+        data = { ...data, ...extraData };
+        // Associate tab or transaction navigation
+        if (extraData.type === 'new_coupon' || extraData.couponId) {
+          data.url = '/?tab=pronos';
+        } else if (extraData.txId) {
+          data.url = `/?tab=history&txId=${extraData.txId}`;
+        }
+      }
     } catch (err) {
-      payload.body = event.data.text();
+      console.warn('[Service Worker] Falling back to text stream parse:', err);
+      body = event.data.text() || body;
     }
   }
 
   const options = {
-    body: payload.body,
-    icon: payload.icon || '/starbetpay_icon.jpg',
+    body: body,
+    icon: '/starbetpay_icon.jpg',
     badge: '/starbetpay_icon.jpg',
     vibrate: [200, 100, 200, 100, 300],
-    data: {
-      url: payload.url || '/'
-    },
+    data: data,
     actions: [
       { action: 'open', title: 'Ouvrir l\'application' },
       { action: 'close', title: 'Fermer' }
@@ -116,7 +134,7 @@ self.addEventListener('push', (event) => {
   };
 
   event.waitUntil(
-    self.registration.showNotification(payload.title, options)
+    self.registration.showNotification(title, options)
   );
 });
 

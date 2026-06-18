@@ -192,5 +192,88 @@ service cloud.firestore {
       allow read: if true;
       allow write: if isAdmin();
     }
+
+    // ==========================================
+    // 9. NOTIFICATIONS COLLECTION
+    // ==========================================
+    match /notifications/{notificationId} {
+      allow get: if isAdmin() || (isSignedIn() && (
+        resource.data.user_id == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(resource.data.user_id)) &&
+         get(/databases/$(database)/documents/users/$(resource.data.user_id)).data.get('authUid', '') == request.auth.uid)
+      ));
+      
+      allow list: if isAdmin() || (isSignedIn() && (
+        resource.data.user_id == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(resource.data.user_id)) &&
+         get(/databases/$(database)/documents/users/$(resource.data.user_id)).data.get('authUid', '') == request.auth.uid)
+      ));
+
+      allow create: if isValidId(notificationId) && isValidNotification(incoming()) && (
+        isAdmin() || 
+        incoming().user_id == 'admin'
+      );
+
+      allow update: if isValidNotification(incoming()) && (
+        isAdmin() || (
+          isSignedIn() && (
+            existing().user_id == request.auth.uid ||
+            (exists(/databases/$(database)/documents/users/$(existing().user_id)) &&
+             get(/databases/$(database)/documents/users/$(existing().user_id)).data.get('authUid', '') == request.auth.uid)
+          ) &&
+          incoming().diff(existing()).affectedKeys().hasOnly(['is_read'])
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    function isValidNotification(notif) {
+      return notif.keys().hasAll(['id', 'user_id', 'title', 'message', 'type', 'is_read', 'created_at']) &&
+             notif.keys().size() <= 9 &&
+             notif.id is string &&
+             notif.user_id is string &&
+             notif.title is string && notif.title.size() <= 200 &&
+             notif.message is string && notif.message.size() <= 2000 &&
+             notif.type is string &&
+             notif.is_read is bool &&
+             notif.created_at is string;
+    }
+
+    // ==========================================
+    // 10. FCM TOKENS COLLECTION
+    // ==========================================
+    match /fcmTokens/{tokenId} {
+      allow read: if isAdmin() || (isSignedIn() && (
+        resource.data.phone == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(resource.data.phone)) &&
+         get(/databases/$(database)/documents/users/$(resource.data.phone)).data.get('authUid', '') == request.auth.uid)
+      ));
+
+      allow create, update: if isValidId(tokenId) && isValidFCMToken(incoming()) && (
+        isAdmin() || (
+          isSignedIn() && (
+            incoming().phone == request.auth.uid ||
+            (exists(/databases/$(database)/documents/users/$(incoming().phone)) &&
+             get(/databases/$(database)/documents/users/$(incoming().phone)).data.get('authUid', '') == request.auth.uid)
+          )
+        )
+      );
+
+      allow delete: if isAdmin() || (isSignedIn() && (
+        existing().phone == request.auth.uid ||
+        (exists(/databases/$(database)/documents/users/$(existing().phone)) &&
+         get(/databases/$(database)/documents/users/$(existing().phone)).data.get('authUid', '') == request.auth.uid)
+      ));
+    }
+
+    function isValidFCMToken(tok) {
+      return tok.keys().hasAll(['id', 'phone', 'token', 'updatedAt']) &&
+             tok.keys().size() == 4 &&
+             tok.id is string &&
+             tok.phone is string &&
+             tok.token is string && tok.token.size() <= 500 &&
+             tok.updatedAt is string;
+    }
   }
 }

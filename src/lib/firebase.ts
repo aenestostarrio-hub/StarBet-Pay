@@ -52,6 +52,66 @@ export const db = initializeFirestore(app, {
 }, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
 
+// FCM messaging imports
+import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
+
+// Dynamic multi-device registry manager
+export async function askForNotificationPermissionAndGetToken(phone: string): Promise<string | null> {
+  try {
+    const supported = await isSupported();
+    if (!supported) {
+      console.warn('[FCM Client] Browser reports Push Messaging is not supported in this frame.');
+      return null;
+    }
+
+    if (typeof Notification === 'undefined') {
+      return null;
+    }
+
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') {
+      console.warn('[FCM Client] Permission to deliver push alerts was denied.');
+      return null;
+    }
+
+    const messagingInstance = getMessaging(app);
+    // Use custom public vapid key if set or fallback to default
+    const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY || undefined;
+
+    const token = await getToken(messagingInstance, { vapidKey });
+    if (token) {
+      console.log('[FCM Client] Registered Push Endpoint Token:', token);
+      
+      try {
+        await fetch('/api/fcm/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ phone, token })
+        });
+      } catch (e) {
+        console.warn('[FCM Client] Failed to register token with Express server backend:', e);
+      }
+
+      if (!useLocalStorageSandbox) {
+        const tokenRef = doc(db, 'fcmTokens', token);
+        await setDoc(tokenRef, {
+          id: token,
+          phone,
+          token,
+          updatedAt: new Date().toISOString()
+        });
+        console.log('[FCM Client] Sync complete inside Firestore.');
+      }
+
+      return token;
+    }
+    return null;
+  } catch (err) {
+    console.warn('[FCM Client Fail] Error acquiring device authorization endpoint:', err);
+    return null;
+  }
+}
+
 // [Firebase Migration] Anonymous auto-signin disabled. Sessions are now persisted via robust Email/Password authentication.
 // Guests are now treated as unauthenticated sessions with public read-only access where permitted by rules.
 

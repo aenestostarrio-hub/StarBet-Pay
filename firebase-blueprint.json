@@ -79,6 +79,35 @@
         "matches": { "type": "array", "description": "List of games included in the slip" }
       },
       "required": ["id", "title", "confidence", "totalCote", "status"]
+    },
+    "Notification": {
+      "title": "Notification",
+      "description": "In-app and push notification record for tracking client and administrator alerts",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Unique notification ID" },
+        "user_id": { "type": "string", "description": "Recipient phone number or admin value" },
+        "title": { "type": "string", "description": "Short notification header text" },
+        "message": { "type": "string", "description": "Main descriptive body of notification alert" },
+        "type": { "type": "string", "description": "The category of the notification" },
+        "is_read": { "type": "boolean", "description": "Read status toggle" },
+        "created_at": { "type": "string", "description": "ISO timestamp representing creation time" },
+        "txId": { "type": "string", "description": "Optional pointer referencing a money transfer request" },
+        "couponId": { "type": "string", "description": "Optional pointer referencing an active betting coupon slip" }
+      },
+      "required": ["id", "user_id", "title", "message", "type", "is_read", "created_at"]
+    },
+    "FCMToken": {
+      "title": "FCMToken",
+      "description": "Firebase Cloud Messaging registry entry associated to user devices",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Token key or matching tracking ID" },
+        "phone": { "type": "string", "description": "Account phone number registered" },
+        "token": { "type": "string", "description": "The unique client push token" },
+        "updatedAt": { "type": "string", "description": "ISO timestamp for last contact" }
+      },
+      "required": ["id", "phone", "token", "updatedAt"]
     }
   },
   "firestore": {
@@ -105,6 +134,14 @@
     "pastCoupons/{pastCouponId}": {
       "schema": "SportCoupon",
       "description": "Settled or archived historical sports coupons"
+    },
+    "notifications/{notificationId}": {
+      "schema": "Notification",
+      "description": "Dynamic alerts dispatched in real-time"
+    },
+    "fcmTokens/{tokenId}": {
+      "schema": "FCMToken",
+      "description": "Mobile and desktop push messaging endpoints"
     }
   }
 }

@@ -69,6 +69,27 @@ export interface SportCoupon {
   date?: string;
 }
 
+export interface DBNotification {
+  id: string;
+  user_id: string; // Recipient phone number or 'admin'
+  title: string;
+  message: string;
+  type: string;
+  is_read: boolean;
+  created_at: string;
+  txId?: string; // Point to transaction if relevant
+  txType?: 'deposit' | 'withdrawal' | 'commission_payout';
+  txStatus?: 'pending' | 'validated' | 'rejected';
+  couponId?: string; // Point to coupon if relevant
+}
+
+export interface FCMToken {
+  id: string;
+  phone: string;
+  token: string;
+  updatedAt: string;
+}
+
 export interface DBState {
   users: Record<string, DBUser>;
   transactions: DBTransaction[];
@@ -77,4 +98,6 @@ export interface DBState {
   coupons: SportCoupon[];
   couponHistory: string[];
   pastCoupons?: SportCoupon[];
+  notifications?: DBNotification[];
+  fcmTokens?: FCMToken[];
 }

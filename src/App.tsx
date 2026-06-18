@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { InstallPrompt } from './components/InstallPrompt';
+import { NotificationCenter } from './components/NotificationCenter';
 import { DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon } from './types';
 import { onSnapshot, collection, query, where, doc, getDoc, setDoc } from 'firebase/firestore';
 import { onAuthStateChanged } from 'firebase/auth';
@@ -1953,119 +1954,24 @@ export default function App() {
               </span>
             )}
 
-            {/* Real-time Notification Bell with Floating Dropdown */}
-            <div className="relative">
-              <button 
-                onClick={() => setShowNotificationCenter(!showNotificationCenter)}
-                title="Mon carnet de notifications"
-                className="relative p-2 text-gray-300 hover:text-white hover:bg-slate-800 rounded-xl transition-all cursor-pointer flex items-center justify-center"
-              >
-                <Bell size={16} />
-                {inAppNotifications.filter(n => !n.read).length > 0 && (
-                  <span className="absolute top-1 right-1 w-4 h-4 bg-red-500 text-[9px] font-bold text-white flex items-center justify-center rounded-full animate-pulse shadow-md shadow-red-500/10">
-                    {inAppNotifications.filter(n => !n.read).length}
-                  </span>
-                )}
-              </button>
-
-              {showNotificationCenter && (
-                <>
-                  {/* Click outside backdrop */}
-                  <div className="fixed inset-0 z-40" onClick={() => setShowNotificationCenter(false)} />
-                  <div className="fixed top-16 right-4 left-4 sm:absolute sm:top-auto sm:right-0 sm:left-auto sm:w-80 sm:mt-2 bg-[#101b35] border border-cyan-500/20 rounded-2xl shadow-xl shadow-black/80 p-4 z-50 animate-fade-in text-gray-100 max-h-[420px] overflow-y-auto">
-                    <div className="flex items-center justify-between border-b border-cyan-500/10 pb-2 mb-3">
-                      <div className="flex items-center gap-1.5">
-                        <Bell size={14} className="text-cyan-400" />
-                        <h4 className="font-extrabold text-sm font-display tracking-tight text-gray-100">Notifications</h4>
-                        {inAppNotifications.filter(n => !n.read).length > 0 && (
-                          <span className="bg-cyan-500/20 text-cyan-400 text-[9px] font-bold px-1.5 py-0.5 rounded-full">
-                            {inAppNotifications.filter(n => !n.read).length} nvl(s)
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex gap-2">
-                        {inAppNotifications.length > 0 && (
-                          <button 
-                            onClick={() => {
-                              setInAppNotifications(prev => prev.map(n => ({ ...n, read: true })));
-                              showToast("Toutes les notifications marquées comme lues.", "info");
-                            }}
-                            className="text-[10px] text-cyan-400 hover:text-cyan-300 font-semibold uppercase hover:underline cursor-pointer"
-                          >
-                            Tout lire
-                          </button>
-                        )}
-                        <button 
-                          onClick={() => setShowNotificationCenter(false)}
-                          className="text-[10px] text-gray-400 hover:text-white cursor-pointer"
-                        >
-                          <X size={14} />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div className="space-y-2 max-h-[300px] overflow-y-auto pr-1">
-                      {inAppNotifications.length === 0 ? (
-                        <div className="text-center py-8 text-gray-400 text-xs">
-                          <Bell size={24} className="mx-auto mb-2 opacity-20 text-cyan-400" />
-                          <p>Aucune notification</p>
-                          <p className="text-[10px] opacity-70 mt-0.5">Vos mises à jour s'afficheront ici en direct.</p>
-                        </div>
-                      ) : (
-                        inAppNotifications.map((notif) => (
-                          <div 
-                            key={notif.id} 
-                            className={`p-2.5 rounded-xl border text-xs transition-all ${
-                              notif.read 
-                                ? 'bg-[#0b1225]/40 border-slate-800/60 opacity-60' 
-                                : 'bg-[#152449]/70 border-cyan-500/15 ring-1 ring-cyan-500/5'
-                            }`}
-                          >
-                            <div className="flex justify-between items-start mb-1 gap-2">
-                              <span className={`font-bold ${
-                                notif.type === 'success' ? 'text-emerald-400' :
-                                notif.type === 'error' ? 'text-red-400' :
-                                notif.type === 'warning' ? 'text-amber-400' : 'text-cyan-400'
-                              }`}>
-                                {notif.title}
-                              </span>
-                              <span className="text-[9px] text-gray-500 font-medium whitespace-nowrap">{notif.date}</span>
-                            </div>
-                            <p className="text-gray-300 text-[11px] leading-relaxed mb-2">{notif.message}</p>
-                            
-                            {!notif.read && (
-                              <button 
-                                onClick={() => {
-                                  setInAppNotifications(prev => prev.map(n => n.id === notif.id ? { ...n, read: true } : n));
-                                }}
-                                className="text-[9px] text-cyan-400 hover:text-cyan-300 font-bold transition-all cursor-pointer"
-                              >
-                                Marquer comme lu
-                              </button>
-                            )}
-                          </div>
-                        ))
-                      )}
-                    </div>
-
-                    {inAppNotifications.length > 0 && (
-                      <div className="border-t border-cyan-500/10 pt-2.5 mt-3 flex justify-between items-center">
-                        <span className="text-[9px] text-gray-400 font-mono">Canal temps réel actif ⚡</span>
-                        <button 
-                          onClick={() => {
-                            setInAppNotifications([]);
-                            showToast("Historique des notifications effacé.", "info");
-                          }}
-                          className="text-[10px] text-red-400 hover:text-red-300 font-medium uppercase font-sans hover:underline cursor-pointer"
-                        >
-                          Effacer tout
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
+            {/* Dynamic Real-time FCM Notification Center Component */}
+            <NotificationCenter
+              user={user}
+              isAdminMode={isAdminMode}
+              onNavigateToTab={(tabId) => {
+                setActiveTab(tabId);
+              }}
+              openTransactionInAdmin={(txId, type, status) => {
+                setIsAdminMode(true);
+                if (type === 'deposit') {
+                  setAdminTab('deposits');
+                } else {
+                  setAdminTab('withdrawals');
+                }
+                setAdminSubTab(status);
+                setExpandedTxIds(prev => ({ ...prev, [txId]: true }));
+              }}
+            />
 
             <button 
               onClick={handleLogout}
