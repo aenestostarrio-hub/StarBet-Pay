@@ -349,6 +349,44 @@ function notifyAdminsOfNewTransaction(tx: DBTransaction) {
   });
 }
 
+// Function to send reusable text messaging notifications to Telegram Bot Channel
+async function sendTelegramNotification(message: string): Promise<boolean> {
+  const token = process.env.TELEGRAM_BOT_TOKEN || '8967814898:AAGxuotTyKfHi772SYDy3ggyRPHj8wAfyOA';
+  const chatId = process.env.TELEGRAM_CHAT_ID || '6902060350';
+
+  if (!token || !chatId) {
+    console.warn('[Telegram Notification Center] Bot Token or Chat ID not defined.');
+    return false;
+  }
+
+  try {
+    const url = `https://api.telegram.org/bot${token}/sendMessage`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: 'HTML'
+      })
+    });
+
+    if (!res.ok) {
+      const respError = await res.text();
+      console.error(`[Telegram Bot Error Response] ${res.status}: ${respError}`);
+      return false;
+    }
+
+    console.log('[Telegram Notification Center] Alert pushed successfully to Bot Chat ID channel.');
+    return true;
+  } catch (err) {
+    console.error('[Telegram Notification Fail-safe Dispatch Error]:', err);
+    return false;
+  }
+}
+
 // Express application setup
 async function startServer() {
   const app = express();
@@ -540,6 +578,25 @@ async function startServer() {
     });
   });
 
+  // Telegram Bot integration manual test endpoint
+  app.post('/api/telegram/test', async (req, res) => {
+    const { message } = req.body;
+    if (!message) {
+      return res.status(400).json({ error: 'Le paramètre message est requis pour envoyer une notification.' });
+    }
+
+    try {
+      const success = await sendTelegramNotification(message);
+      if (success) {
+        return res.json({ success: true, message: 'Message Telegram envoyé avec succès !' });
+      } else {
+        return res.status(500).json({ success: false, error: "L'envoi du message Telegram a échoué. Veuillez vérifier les identifiants." });
+      }
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message || err });
+    }
+  });
+
   // Payment configuration endpoints
   app.get('/api/config', (req, res) => {
     const db = getDB();
@@ -644,6 +701,21 @@ async function startServer() {
       `${type}_request`,
       { txId: newTx.id, txType: type, txStatus: 'pending' }
     );
+
+    // Send notification via Telegram bot when a new transaction request is created
+    const opLabelText = type === 'deposit' ? '🟢 DEMANDE DE DÉPÔT' : '🔴 DEMANDE DE RETRAIT';
+    const tgMsg = `<b>📥 NOUVELLE DEMANDE SUR STARBETPAY 📥</b>\n\n` +
+                  `<b>🔑 ID Transaction:</b> <code>${txId}</code>\n` +
+                  `<b>📊 Type de Demande:</b> ${opLabelText}\n` +
+                  `<b>👤 Client:</b> ${user.name} (${userPhone})\n` +
+                  `<b>💰 Montant:</b> <code>${Number(amount).toLocaleString('fr-FR')} FCFA</code>\n` +
+                  `<b>🎯 Compte 1xBet:</b> <code>${xbetAccount || 'N/A'}</code>\n` +
+                  `<b>📲 Moyen de Paiement:</b> ${paymentMethod || 'Manuel'} ${paymentNumber ? `(${paymentNumber})` : ''}\n` +
+                  `<b>⏳ Statut:</b> En attente de validation\n` +
+                  `<b>⏱️ Reçu le:</b> ${newTx.date}`;
+    sendTelegramNotification(tgMsg).catch((err) => {
+      console.error('[Telegram New request Notification Error]', err);
+    });
 
     res.json({ message: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.', transaction: newTx });
   });
