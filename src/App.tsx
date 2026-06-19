@@ -206,7 +206,14 @@ export default function App() {
     socialWhatsapp: '',
     socialTiktok: '',
     socialTelegram: '',
-    socialFacebook: ''
+    socialFacebook: '',
+    adminEmailRecipients: '',
+    smtpHost: '',
+    smtpPort: '',
+    smtpUser: '',
+    smtpPass: '',
+    resendApiKey: '',
+    emailSenderName: 'StarBetPay'
   });
   const [paymentMethods, setPaymentMethods] = useState<PaymentMethod[]>([]);
   const [coupons, setCoupons] = useState<SportCoupon[]>([]);
@@ -398,8 +405,20 @@ export default function App() {
     socialWhatsapp: '',
     socialTiktok: '',
     socialTelegram: '',
-    socialFacebook: ''
+    socialFacebook: '',
+    adminEmailRecipients: '',
+    smtpHost: '',
+    smtpPort: '',
+    smtpUser: '',
+    smtpPass: '',
+    resendApiKey: '',
+    emailSenderName: ''
   });
+  const [emailTestStatus, setEmailTestStatus] = useState<{
+    loading: boolean;
+    success?: boolean;
+    message?: string;
+  } | null>(null);
   const [paymentMethodForm, setPaymentMethodForm] = useState({
     name: '',
     number: '',
@@ -473,7 +492,14 @@ export default function App() {
         socialWhatsapp: configData.socialWhatsapp || '',
         socialTiktok: configData.socialTiktok || '',
         socialTelegram: configData.socialTelegram || '',
-        socialFacebook: configData.socialFacebook || ''
+        socialFacebook: configData.socialFacebook || '',
+        adminEmailRecipients: configData.adminEmailRecipients || '',
+        smtpHost: configData.smtpHost || '',
+        smtpPort: configData.smtpPort || '',
+        smtpUser: configData.smtpUser || '',
+        smtpPass: configData.smtpPass || '',
+        resendApiKey: configData.resendApiKey || '',
+        emailSenderName: configData.emailSenderName || 'StarBetPay'
       });
 
       const pmData = await dbService.getPaymentMethods();
@@ -1581,6 +1607,48 @@ export default function App() {
     } catch (err: any) {
       console.error(err);
       showToast(err.message || 'Erreur lors de la mise à jour.', 'error');
+    }
+  };
+
+  const handleTestEmail = async () => {
+    setEmailTestStatus({ loading: true });
+    try {
+      const res = await fetch('/api/email/test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: 'Félicitations ! Votre intégration de notifications Email pour les dépôts et retraits de StarBetPay fonctionne parfaitement ! 🚀',
+          customSmtpHost: configForm.smtpHost,
+          customSmtpPort: configForm.smtpPort,
+          customSmtpUser: configForm.smtpUser,
+          customSmtpPass: configForm.smtpPass,
+          customResendApiKey: configForm.resendApiKey,
+          customAdminEmail: configForm.adminEmailRecipients
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setEmailTestStatus({
+          loading: false,
+          success: true,
+          message: 'Email de test envoyé avec succès ! Vérifiez votre boîte de réception ou dossier de spams.'
+        });
+        showToast('Notification de test envoyée ! Checkez vos emails.', 'success');
+      } else {
+        setEmailTestStatus({
+          loading: false,
+          success: false,
+          message: data.error || 'Erreur inconnue lors du test.'
+        });
+        showToast("Échec de l'envoi de test.", 'error');
+      }
+    } catch (err: any) {
+      setEmailTestStatus({
+        loading: false,
+        success: false,
+        message: err.message || 'Impossible de contacter le serveur.'
+      });
+      showToast("Erreur réseau.", 'error');
     }
   };
 
@@ -4915,6 +4983,146 @@ export default function App() {
                               onChange={(e) => setConfigForm({ ...configForm, socialFacebook: e.target.value })}
                             />
                           </div>
+                        </div>
+                      </div>
+
+                      {/* Email Notifications Configuration */}
+                      <div className="pt-4 border-t border-slate-800 space-y-3">
+                        <span className="block text-xs font-bold text-gray-200 uppercase tracking-widest text-[9px] flex items-center gap-1.5 text-cyan-400">
+                          <Send size={12} className="text-cyan-400" />
+                          Configuration des Notification Emails Administrateur
+                        </span>
+                        <p className="text-[10px] text-gray-400 leading-normal">
+                          Remplace l’ancien système Telegram ! Recevez instantanément les alertes de dépôts et de retraits par Email. Renseignez l’une des deux approches ci-dessous (laissez vide pour utiliser les paramètres de l’environnement par défaut).
+                        </p>
+
+                        <div className="space-y-4">
+                          <div>
+                            <label className="block text-gray-400 text-[9.5px] uppercase font-semibold mb-1 flex justify-between items-center">
+                              <span>Emails des Destinataires Admin (séparés par virgule si plusieurs)</span>
+                              <span className="text-[8px] text-gray-500 lowercase">(ex: admin@site.com)</span>
+                            </label>
+                            <input 
+                              type="text" 
+                              placeholder="Ex: aenestostarrio@gmail.com"
+                              className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white font-mono placeholder:text-gray-700"
+                              value={configForm.adminEmailRecipients}
+                              onChange={(e) => setConfigForm({ ...configForm, adminEmailRecipients: e.target.value })}
+                            />
+                          </div>
+
+                          <div className="p-3 bg-[#0d1326]/60 border border-slate-800/80 rounded-xl space-y-3">
+                            <span className="block text-[9.5px] font-bold text-cyan-500 uppercase tracking-wide">
+                              Approche 1 : Protocole SMTP Classique (ex: Gmail, Hostinger)
+                            </span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div>
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1 font-mono">Serveur SMTP (Host)</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="smtp.gmail.com"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-700 font-mono"
+                                  value={configForm.smtpHost}
+                                  onChange={(e) => setConfigForm({ ...configForm, smtpHost: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1 font-mono">Port SMTP</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="587 ou 465"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-700 font-mono"
+                                  value={configForm.smtpPort}
+                                  onChange={(e) => setConfigForm({ ...configForm, smtpPort: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1 font-mono">Identifiant / Émail de Connexion</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="mon-alert-sender@gmail.com"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-700 font-mono"
+                                  value={configForm.smtpUser}
+                                  onChange={(e) => setConfigForm({ ...configForm, smtpUser: e.target.value })}
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1 font-mono">Mot de passe / Clé d'application</label>
+                                <input 
+                                  type="password" 
+                                  placeholder="••••••••••••••••"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-700 font-mono"
+                                  value={configForm.smtpPass}
+                                  onChange={(e) => setConfigForm({ ...configForm, smtpPass: e.target.value })}
+                                />
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="p-3 bg-[#0d1326]/60 border border-slate-800/80 rounded-xl space-y-3">
+                            <span className="block text-[9.5px] font-bold text-pink-400 uppercase tracking-wide">
+                              Approche 2 : API Moderne Resend / SendGrid (Recommandé)
+                            </span>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                              <div className="col-span-1 md:col-span-2 font-mono">
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1 flex justify-between items-center">
+                                  <span>Clé API Resend (API Key)</span>
+                                  <span className="text-[8px] text-gray-500">(ex: re_123456...)</span>
+                                </label>
+                                <input 
+                                  type="password" 
+                                  placeholder="Saisissez votre clé API Resend"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-700 font-mono"
+                                  value={configForm.resendApiKey}
+                                  onChange={(e) => setConfigForm({ ...configForm, resendApiKey: e.target.value })}
+                                />
+                              </div>
+                              <div className="col-span-1 md:col-span-2">
+                                <label className="block text-gray-400 text-[8.5px] uppercase font-semibold mb-1">Nom d'expéditeur personnalisé</label>
+                                <input 
+                                  type="text" 
+                                  placeholder="StarBetPay Alerts"
+                                  className="w-full bg-[#080d1a] border border-slate-800 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-gray-705"
+                                  value={configForm.emailSenderName}
+                                  onChange={(e) => setConfigForm({ ...configForm, emailSenderName: e.target.value })}
+                                />
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Test button & diagnostics */}
+                        <div className="pt-2">
+                          <button
+                            type="button"
+                            onClick={handleTestEmail}
+                            disabled={emailTestStatus?.loading}
+                            className={`px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-wider flex items-center gap-1.5 transition-all outline-none ${
+                              emailTestStatus?.loading 
+                                ? 'bg-gray-800 text-gray-400 border border-slate-800' 
+                                : 'bg-[#1b2b52] hover:bg-[#253c73] text-cyan-400 border border-cyan-500/30'
+                            }`}
+                          >
+                            {emailTestStatus?.loading ? 'Envoi du test...' : "🧪 Tester la configuration Email"}
+                          </button>
+
+                          {emailTestStatus && (
+                            <div className={`mt-2 p-3 rounded-xl border text-[10px] leading-relaxed ${
+                              emailTestStatus.success 
+                                ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300' 
+                                : 'bg-red-500/5 border-red-500/20 text-red-300'
+                            }`}>
+                              <p className="font-bold mb-0.5">{emailTestStatus.success ? 'Succès !' : 'Échec :'}</p>
+                              <p className="font-mono break-all">{emailTestStatus.message}</p>
+                              {!emailTestStatus.success && (
+                                <p className="mt-1 text-gray-400 leading-normal">
+                                  💡 <b>Conseils :</b> 
+                                  <br />- <b>SMTP :</b> Si vous utilisez Gmail, créez un <b>mot de passe d’application</b> unique sur votre compte Google. Le mot de passe de votre boîte mail standard est bloqué par défaut.
+                                  <br />- <b>Resend :</b> Si vous n'avez pas de domaine vérifié, le domaine par défaut disponible est <b>onboarding@resend.dev</b> et vous ne pouvez envoyer d'emails qu'à vous-même (votre email d'inscription).
+                                </p>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
 

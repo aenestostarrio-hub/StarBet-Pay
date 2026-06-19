@@ -48,6 +48,13 @@ export interface AppConfig {
   socialTiktok?: string;
   socialTelegram?: string;
   socialFacebook?: string;
+  adminEmailRecipients?: string;
+  smtpHost?: string;
+  smtpPort?: string;
+  smtpUser?: string;
+  smtpPass?: string;
+  resendApiKey?: string;
+  emailSenderName?: string;
 }
 
 export interface PronoMatch {

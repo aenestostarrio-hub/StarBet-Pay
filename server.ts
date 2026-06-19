@@ -6,6 +6,7 @@ import { GoogleGenAI, Type } from '@google/genai';
 import dotenv from 'dotenv';
 import { DBState, DBUser, DBTransaction, PaymentMethod, AppConfig, SportCoupon, DBNotification, FCMToken } from './src/types';
 import admin from 'firebase-admin';
+import nodemailer from 'nodemailer';
 
 dotenv.config();
 
@@ -349,42 +350,92 @@ function notifyAdminsOfNewTransaction(tx: DBTransaction) {
   });
 }
 
-// Function to send reusable text messaging notifications to Telegram Bot Channel
-async function sendTelegramNotification(message: string): Promise<boolean> {
-  const token = process.env.TELEGRAM_BOT_TOKEN || '8967814898:AAGxuotTyKfHi772SYDy3ggyRPHj8wAfyOA';
-  const chatId = process.env.TELEGRAM_CHAT_ID || '6902060350';
+// Function to send reusable email notifications to the admin via SMTP or Resend API
+async function sendAdminEmailNotification(subject: string, htmlMessage: string): Promise<boolean> {
+  const db = getDB();
+  const config = (db.config || {}) as AppConfig;
 
-  if (!token || !chatId) {
-    console.warn('[Telegram Notification Center] Bot Token or Chat ID not defined.');
+  // Resolve config with fallback to environment variables
+  const adminEmail = config.adminEmailRecipients || process.env.ADMIN_EMAIL || 'aenestostarrio@gmail.com';
+  const senderName = config.emailSenderName || process.env.SENDER_NAME || 'StarBetPay';
+  
+  const resendApiKey = config.resendApiKey || process.env.RESEND_API_KEY;
+  const smtpHost = config.smtpHost || process.env.SMTP_HOST;
+  const smtpPortStr = config.smtpPort || process.env.SMTP_PORT || '587';
+  const smtpPort = parseInt(smtpPortStr, 10);
+  const smtpUser = config.smtpUser || process.env.SMTP_USER;
+  const smtpPass = config.smtpPass || process.env.SMTP_PASS;
+
+  if (!adminEmail) {
+    console.warn('[Email Notification Center] Recipient adminEmail not defined.');
     return false;
   }
 
-  try {
-    const url = `https://api.telegram.org/bot${token}/sendMessage`;
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        chat_id: chatId,
-        text: message,
-        parse_mode: 'HTML'
-      })
-    });
+  // --- Approach 2: Modern API service (Resend) ---
+  if (resendApiKey) {
+    try {
+      console.log('[Email Notification Center] Sending email via Resend API...');
+      const response = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${resendApiKey}`
+        },
+        body: JSON.stringify({
+          from: `${senderName} <onboarding@resend.dev>`, // Resend supports onboarding@resend.dev by default
+          to: adminEmail.split(',').map(email => email.trim()),
+          subject: subject,
+          html: htmlMessage
+        })
+      });
 
-    if (!res.ok) {
-      const respError = await res.text();
-      console.error(`[Telegram Bot Error Response] ${res.status}: ${respError}`);
+      if (response.ok) {
+        console.log('[Email Notification Center] Email alert dispatched successfully via Resend API.');
+        return true;
+      } else {
+        const errText = await response.text();
+        console.error(`[Email Notification Center] Resend API error: ${response.status} - ${errText}`);
+        // Fallback to SMTP if Resend fails but SMTP is configured below
+      }
+    } catch (e) {
+      console.error('[Email Notification Center] Exception during Resend API dispatch:', e);
+    }
+  }
+
+  // --- Approach 1: Classic SMTP protocol using Nodemailer ---
+  if (smtpHost && smtpUser && smtpPass) {
+    try {
+      console.log('[Email Notification Center] Sending email via SMTP (Nodemailer)...');
+      const transporter = nodemailer.createTransport({
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpPort === 465, // true for 465, false for 587 or other ports
+        auth: {
+          user: smtpUser,
+          pass: smtpPass
+        },
+        tls: {
+          rejectUnauthorized: false // avoids SSL blockages in typical hosted environments
+        }
+      });
+
+      const info = await transporter.sendMail({
+        from: `"${senderName}" <${smtpUser}>`,
+        to: adminEmail,
+        subject: subject,
+        html: htmlMessage
+      });
+
+      console.log('[Email Notification Center] Email alert dispatched successfully via SMTP:', info.messageId);
+      return true;
+    } catch (err) {
+      console.error('[Email Notification Center] SMTP Dispatch Error:', err);
       return false;
     }
-
-    console.log('[Telegram Notification Center] Alert pushed successfully to Bot Chat ID channel.');
-    return true;
-  } catch (err) {
-    console.error('[Telegram Notification Fail-safe Dispatch Error]:', err);
-    return false;
   }
+
+  console.warn('[Email Notification Center] No active email provider configured (missing RESEND_API_KEY or SMTP credentials). Please check .env or Admin panel settings.');
+  return false;
 }
 
 // Express application setup
@@ -578,27 +629,96 @@ async function startServer() {
     });
   });
 
-  // Telegram Bot integration manual test endpoint
-  app.post('/api/telegram/test', async (req, res) => {
-    const { message } = req.body;
-    if (!message) {
-      return res.status(400).json({ error: 'Le paramètre message est requis pour envoyer une notification.' });
+  // Email Integration manual test endpoint
+  app.post('/api/email/test', async (req, res) => {
+    const { message, customSmtpHost, customSmtpPort, customSmtpUser, customSmtpPass, customResendApiKey, customAdminEmail } = req.body;
+    
+    const db = getDB();
+    const config = (db.config || {}) as AppConfig;
+    
+    const adminEmail = customAdminEmail || config.adminEmailRecipients || process.env.ADMIN_EMAIL || 'aenestostarrio@gmail.com';
+    const senderName = config.emailSenderName || process.env.SENDER_NAME || 'StarBetPay';
+    
+    const resendApiKey = customResendApiKey || config.resendApiKey || process.env.RESEND_API_KEY;
+    const smtpHost = customSmtpHost || config.smtpHost || process.env.SMTP_HOST;
+    const smtpPortStr = customSmtpPort || config.smtpPort || process.env.SMTP_PORT || '587';
+    const smtpPort = parseInt(smtpPortStr, 10);
+    const smtpUser = customSmtpUser || config.smtpUser || process.env.SMTP_USER;
+    const smtpPass = customSmtpPass || config.smtpPass || process.env.SMTP_PASS;
+
+    if (!adminEmail) {
+      return res.status(400).json({ success: false, error: "Adresse email de l'administrateur non configurée." });
     }
 
+    const testSubject = `🧪 TEST CONFIGURATION EMAIL - ${senderName.toUpperCase()}`;
+    const testHtml = `<div style="font-family: Arial, sans-serif; padding: 20px; line-height: 1.6; color: #111a33; border: 1px solid #ddd; border-radius: 12px; background-color: #fcfcfc;">` +
+                     `<h2 style="color: #0284c7; margin-bottom: 10px;">🔔 Félicitations ! Votre Configuration Email fonctionne !</h2>` +
+                     `<p>${message || "Votre intégration de notifications d'email fonctionne parfaitement sur StarBetPay."}</p>` +
+                     `<hr style="border: 0; border-top: 1px solid #eee; margin: 20px 0;"/>` +
+                     `<p style="font-size: 11px; color: #666;">Ce message a été généré automatiquement par l'application StarBetPay suite à votre test de configuration.</p>` +
+                     `</div>`;
+
+    // Try routing via Resend or SMTP
     try {
-      const success = await sendTelegramNotification(message);
-      if (success) {
-        return res.json({ success: true, message: 'Message Telegram envoyé avec succès !' });
-      } else {
-        return res.status(500).json({ success: false, error: "L'envoi du message Telegram a échoué. Veuillez vérifier les identifiants." });
+      if (resendApiKey) {
+        console.log('[Email Test] Sending test email via Resend API...');
+        const response = await fetch('https://api.resend.com/emails', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${resendApiKey}`
+          },
+          body: JSON.stringify({
+            from: `${senderName} <onboarding@resend.dev>`,
+            to: adminEmail.split(',').map(email => email.trim()),
+            subject: testSubject,
+            html: testHtml
+          })
+        });
+
+        if (response.ok) {
+          const respData = await response.text();
+          return res.json({ success: true, message: 'Email de test envoyé avec succès via l’API Resend !', rawResponse: respData });
+        } else {
+          const errText = await response.text();
+          return res.status(400).json({ success: false, error: `Erreur API Resend (${response.status}): ${errText}` });
+        }
       }
+
+      if (smtpHost && smtpUser && smtpPass) {
+        console.log('[Email Test] Sending test email via SMTP...');
+        const transporter = nodemailer.createTransport({
+          host: smtpHost,
+          port: smtpPort,
+          secure: smtpPort === 465,
+          auth: {
+            user: smtpUser,
+            pass: smtpPass
+          },
+          tls: {
+            rejectUnauthorized: false
+          }
+        });
+
+        const info = await transporter.sendMail({
+          from: `"${senderName}" <${smtpUser}>`,
+          to: adminEmail,
+          subject: testSubject,
+          html: testHtml
+        });
+
+        return res.json({ success: true, message: `Email de test envoyé avec succès via SMTP ! ID: ${info.messageId}` });
+      }
+
+      return res.status(400).json({ success: false, error: "Aucun fournisseur actif (Resend ou SMTP) n'est configuré. Veuillez renseigner l'API Key Resend ou vos identifiants SMTP." });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message || err });
+      console.error('[Email Test Exception]:', err);
+      return res.status(500).json({ success: false, error: err.message || JSON.stringify(err) });
     }
   });
 
-  // Telegram Bot integration for new deposit & withdrawal requests
-  app.post('/api/telegram/notify-new-transaction', async (req, res) => {
+  // Email Integration for new deposit & withdrawal requests
+  app.post('/api/email/notify-new-transaction', async (req, res) => {
     const { tx } = req.body;
     if (!tx) {
       return res.status(400).json({ error: 'Données de la transaction requises' });
@@ -607,22 +727,69 @@ async function startServer() {
     try {
       const isDeposit = tx.type === 'deposit';
       const typeLabel = isDeposit ? '🟢 DEMANDE DE DÉPÔT' : '🔴 DEMANDE DE RETRAIT';
-      
-      const tgMsg = `<b>📥 NOUVELLE DEMANDE SUR STARBETPAY 📥</b>\n\n` +
-                    `<b>🔑 ID Transaction:</b> <code>${tx.id}</code>\n` +
-                    `<b>📊 Type:</b> ${typeLabel}\n` +
-                    `<b>👤 Client:</b> ${tx.userName || 'Client'} (${tx.userPhone})\n` +
-                    `<b>💰 Montant:</b> <code>${Number(tx.amount).toLocaleString('fr-FR')} FCFA</code>\n` +
-                    `<b>🎯 Compte 1xBet:</b> <code>${tx.xbetAccount || 'N/A'}</code>\n` +
-                    `<b>📲 Moyen de Paiement:</b> ${tx.paymentMethod || 'Manuel'} ${tx.paymentNumber ? `(${tx.paymentNumber})` : ''}\n` +
-                    (tx.withdrawCode ? `<b>🔑 Code de Retrait:</b> <code>${tx.withdrawCode}</code>\n` : '') +
-                    `<b>⏳ Statut:</b> En attente de validation\n` +
-                    `<b>⏱️ Reçu le:</b> ${tx.date || new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Dakar' })}`;
+      const subject = `⚠️ NOUVELLE TRANSACTION STARBETPAY - [${isDeposit ? 'DEPOT' : 'RETRAIT'}] ${Number(tx.amount).toLocaleString('fr-FR')} FCFA`;
 
-      const success = await sendTelegramNotification(tgMsg);
-      return res.json({ success, message: success ? 'Notification Telegram envoyée avec succès !' : 'Échec de la notification' });
+      const emailHtml = `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+          <div style="background-color: ${isDeposit ? '#10b981' : '#ef4444'}; padding: 24px; text-align: center; color: #ffffff;">
+            <h1 style="margin: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.5px;">📥 NOUVELLE DEMANDE SUR STARBETPAY</h1>
+            <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.9;">Un client vient de soumettre une transaction en attente de validation</p>
+          </div>
+          <div style="padding: 24px; color: #1e293b; line-height: 1.6;">
+            <div style="background-color: #f8fafc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+              <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">ID Transaction:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-family: monospace; font-weight: bold; text-align: right;">${tx.id}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Type d'Opération:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: ${isDeposit ? '#10b981' : '#ef4444'}; font-weight: bold; text-align: right;">${typeLabel}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Client:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right;">${tx.userName || 'Client'} (${tx.userPhone})</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 14px; color: #64748b; font-weight: 600;">Montant:</td>
+                  <td style="padding: 6px 0; font-size: 16px; color: #1e3a8a; font-weight: bold; text-align: right; letter-spacing: 0.5px;">${Number(tx.amount).toLocaleString('fr-FR')} FCFA</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Compte 1xBet:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right; font-family: monospace;">${tx.xbetAccount || 'N/A'}</td>
+                </tr>
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Moyen de Paiement:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right;">${tx.paymentMethod || 'Manuel'} ${tx.paymentNumber ? `(${tx.paymentNumber})` : ''}</td>
+                </tr>
+                ${tx.withdrawCode ? `
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #ec4899; font-weight: 600;">🔑 Code de Retrait:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #ec4899; font-weight: bold; text-align: right; font-family: monospace;">${tx.withdrawCode}</td>
+                </tr>
+                ` : ''}
+                <tr>
+                  <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Date de Demande:</td>
+                  <td style="padding: 6px 0; font-size: 13px; color: #0f172a; text-align: right;">${tx.date || new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Dakar' })}</td>
+                </tr>
+              </table>
+            </div>
+            
+            <div style="text-align: center; margin-top: 24px;">
+              <p style="margin: 0 0 16px 0; font-size: 12px; color: #64748b;">Connectez-vous à votre interface d'administration pour valider ou rejeter cette transaction.</p>
+              <a href="${process.env.APP_URL || 'https://ais-dev-j43ovx3bhk5m5evodjppfq-129613703311.europe-west2.run.app'}" style="display: inline-block; background-color: #1e3a8a; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 13px; font-weight: bold; text-align: center; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.2);">Accéder au Tableau de Bord Admin</a>
+            </div>
+          </div>
+          <div style="background-color: #f1f5f9; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
+            <p style="margin: 0; font-size: 11px; color: #94a3b8;">&copy; ${new Date().getFullYear()} StarBetPay Admin Alert Core. Sécurité assurée.</p>
+          </div>
+        </div>
+      `;
+
+      const success = await sendAdminEmailNotification(subject, emailHtml);
+      return res.json({ success, message: success ? 'Notification Email envoyée à l’administrateur !' : 'Échec de la notification' });
     } catch (err: any) {
-      console.error('[Telegram API Notify Error]:', err);
+      console.error('[Email API Notify Error]:', err);
       return res.status(500).json({ error: err.message || err });
     }
   });
@@ -732,19 +899,67 @@ async function startServer() {
       { txId: newTx.id, txType: type, txStatus: 'pending' }
     );
 
-    // Send notification via Telegram bot when a new transaction request is created
+    // Send email alert to the admin when a new transaction request is created
     const opLabelText = type === 'deposit' ? '🟢 DEMANDE DE DÉPÔT' : '🔴 DEMANDE DE RETRAIT';
-    const tgMsg = `<b>📥 NOUVELLE DEMANDE SUR STARBETPAY 📥</b>\n\n` +
-                  `<b>🔑 ID Transaction:</b> <code>${txId}</code>\n` +
-                  `<b>📊 Type de Demande:</b> ${opLabelText}\n` +
-                  `<b>👤 Client:</b> ${user.name} (${userPhone})\n` +
-                  `<b>💰 Montant:</b> <code>${Number(amount).toLocaleString('fr-FR')} FCFA</code>\n` +
-                  `<b>🎯 Compte 1xBet:</b> <code>${xbetAccount || 'N/A'}</code>\n` +
-                  `<b>📲 Moyen de Paiement:</b> ${paymentMethod || 'Manuel'} ${paymentNumber ? `(${paymentNumber})` : ''}\n` +
-                  `<b>⏳ Statut:</b> En attente de validation\n` +
-                  `<b>⏱️ Reçu le:</b> ${newTx.date}`;
-    sendTelegramNotification(tgMsg).catch((err) => {
-      console.error('[Telegram New request Notification Error]', err);
+    const emailSubject = `⚠️ NOUVELLE TRANSACTION STARBETPAY - [${type === 'deposit' ? 'DEPOT' : 'RETRAIT'}] ${Number(amount).toLocaleString('fr-FR')} FCFA`;
+    const emailBody = `
+      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+        <div style="background-color: ${type === 'deposit' ? '#10b981' : '#ef4444'}; padding: 24px; text-align: center; color: #ffffff;">
+          <h1 style="margin: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.5px;">📥 NOUVELLE DEMANDE SUR STARBETPAY</h1>
+          <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.9;">Un client vient de soumettre une transaction en attente de validation</p>
+        </div>
+        <div style="padding: 24px; color: #1e293b; line-height: 1.6;">
+          <div style="background-color: #f8fafc; border-radius: 12px; padding: 16px; margin-bottom: 20px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">ID Transaction:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-family: monospace; font-weight: bold; text-align: right;">${newTx.id}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Type d'Opération:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: ${type === 'deposit' ? '#10b981' : '#ef4444'}; font-weight: bold; text-align: right;">${opLabelText}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Client:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right;">${user.name} (${userPhone})</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 14px; color: #64748b; font-weight: 600;">Montant:</td>
+                <td style="padding: 6px 0; font-size: 16px; color: #1e3a8a; font-weight: bold; text-align: right; letter-spacing: 0.5px;">${Number(amount).toLocaleString('fr-FR')} FCFA</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Compte 1xBet:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right; font-family: monospace;">${xbetAccount || 'N/A'}</td>
+              </tr>
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Moyen de Paiement:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0f172a; font-weight: bold; text-align: right;">${paymentMethod || 'Manuel'} ${paymentNumber ? `(${paymentNumber})` : ''}</td>
+              </tr>
+              ${newTx.withdrawCode ? `
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #ec4899; font-weight: 600;">🔑 Code de Retrait:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #ec4899; font-weight: bold; text-align: right; font-family: monospace;">${newTx.withdrawCode}</td>
+              </tr>
+              ` : ''}
+              <tr>
+                <td style="padding: 6px 0; font-size: 13px; color: #64748b; font-weight: 600;">Date de Demande:</td>
+                <td style="padding: 6px 0; font-size: 13px; color: #0f172a; text-align: right;">${newTx.date}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <div style="text-align: center; margin-top: 24px;">
+            <p style="margin: 0 0 16px 0; font-size: 12px; color: #64748b;">Connectez-vous à votre interface d'administration pour valider ou rejeter cette transaction.</p>
+            <a href="${process.env.APP_URL || 'https://ais-dev-j43ovx3bhk5m5evodjppfq-129613703311.europe-west2.run.app'}" style="display: inline-block; background-color: #1e3a8a; color: #ffffff; text-decoration: none; padding: 12px 28px; border-radius: 8px; font-size: 13px; font-weight: bold; text-align: center; box-shadow: 0 2px 4px rgba(30, 58, 138, 0.2);">Accéder au Tableau de Bord Admin</a>
+          </div>
+        </div>
+        <div style="background-color: #f1f5f9; padding: 16px; text-align: center; border-top: 1px solid #e2e8f0;">
+          <p style="margin: 0; font-size: 11px; color: #94a3b8;">&copy; ${new Date().getFullYear()} StarBetPay Admin Alert Core. Sécurité assurée.</p>
+        </div>
+      </div>
+    `;
+    sendAdminEmailNotification(emailSubject, emailBody).catch((err) => {
+      console.error('[Email New request Notification Error]', err);
     });
 
     res.json({ message: 'Demande enregistrée en temps réel, en attente de vérification par l\'administration.', transaction: newTx });

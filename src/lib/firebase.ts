@@ -507,6 +507,18 @@ export const dbService = {
       const current = docSnap.exists() ? docSnap.data() : initialLocalDB.config;
       const updated = { ...current, ...configUpdates } as AppConfig;
       await setDoc(docRef, updated);
+
+      // Sync and persist settings to the Express local memory/file storage (database.json) too!
+      try {
+        await fetch('/api/config/update', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(configUpdates)
+        });
+      } catch (err) {
+        console.warn("[Email Settings API Sync Warning]:", err);
+      }
+
       return updated;
     } catch (e) {
       if (isOfflineOrError(e)) {
@@ -515,6 +527,16 @@ export const dbService = {
         const ldb = getLocalDB();
         ldb.config = { ...ldb.config, ...configUpdates };
         saveLocalDB(ldb);
+
+        // Try syncing with API in fallback mode too
+        try {
+          await fetch('/api/config/update', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(configUpdates)
+          });
+        } catch (err) {}
+
         return ldb.config;
       }
       handleFirestoreError(e, OperationType.WRITE, 'config/app');
@@ -1459,13 +1481,13 @@ export const dbService = {
 
       await setDoc(doc(db, 'transactions', txId), newTx);
 
-      // Trigger Telegram Notification via background api
-      fetch('/api/telegram/notify-new-transaction', {
+      // Trigger Email Notification via background api
+      fetch('/api/email/notify-new-transaction', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ tx: newTx })
       }).catch(err => {
-        console.warn('[Telegram Background Dispatch Error]:', err);
+        console.warn('[Email Background Dispatch Error]:', err);
       });
 
       return newTx;
@@ -1488,13 +1510,13 @@ export const dbService = {
         ldb.transactions.push(newTx);
         saveLocalDB(ldb);
 
-        // Trigger Telegram Notification via background api
-        fetch('/api/telegram/notify-new-transaction', {
+        // Trigger Email Notification via background api
+        fetch('/api/email/notify-new-transaction', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ tx: newTx })
         }).catch(err => {
-          console.warn('[Telegram Background Dispatch Error - Fallback]:', err);
+          console.warn('[Email Background Dispatch Error - Fallback]:', err);
         });
 
         return newTx;
