@@ -908,12 +908,22 @@ export const dbService = {
           const q = query(usersCol, where('referralCode', '==', trimmedCode));
           const qSnap = await getDocs(q);
           if (!qSnap.empty) {
-            cleanParentPhone = qSnap.docs[0].id; // resolved email/phone of parent
+            const parentData = qSnap.docs[0].data() as DBUser;
+            if (parentData.isPartner === true) {
+              cleanParentPhone = qSnap.docs[0].id; // resolved email/phone of parent
+            } else {
+              console.warn("[Register Sponsor Lookup] Sponsoring user is not an active partner:", qSnap.docs[0].id);
+            }
           } else {
             // Check if they entered the parent's actual email of the document ID
             const directDoc = await getDoc(doc(db, 'users', trimmedCode));
             if (directDoc.exists()) {
-              cleanParentPhone = trimmedCode;
+              const parentData = directDoc.data() as DBUser;
+              if (parentData.isPartner === true) {
+                cleanParentPhone = trimmedCode;
+              } else {
+                console.warn("[Register Sponsor Lookup] Direct Sponsoring user is not an active partner:", trimmedCode);
+              }
             }
           }
         } catch (err) {
@@ -970,7 +980,7 @@ export const dbService = {
         if (parentPhone) {
           const trimmedCode = parentPhone.trim();
           const foundParent = Object.values(ldb.users).find(u => u.referralCode === trimmedCode || u.phone === trimmedCode);
-          if (foundParent) {
+          if (foundParent && foundParent.isPartner === true) {
             cleanParentPhone = foundParent.phone;
           }
         }
@@ -1270,7 +1280,7 @@ export const dbService = {
     }
   },
 
-  async requestCommissionPayout(phone: string): Promise<{ user: DBUser, transaction: DBTransaction }> {
+  async requestCommissionPayout(phone: string, xbetAccount: string): Promise<{ user: DBUser, transaction: DBTransaction }> {
     try {
       if (useLocalStorageSandbox) throw new Error('forced offline');
       const docRef = doc(db, 'users', phone);
@@ -1279,8 +1289,8 @@ export const dbService = {
 
       const user = docSnap.data() as DBUser;
       const balanceCommission = Number(user.balanceCommission);
-      if (balanceCommission < 2000) {
-        throw new Error('Le montant minimum pour le retrait des gains est de 2 000 FCFA');
+      if (balanceCommission < 5000) {
+        throw new Error('Le montant minimum pour le retrait des gains est de 5 000 FCFA');
       }
 
       const pullAmount = balanceCommission;
@@ -1302,7 +1312,7 @@ export const dbService = {
         amount: pullAmount,
         userPhone: phone,
         userName: user.name,
-        xbetAccount: 'COMMISSION_RETRAIT',
+        xbetAccount: xbetAccount || 'COMMISSION_RETRAIT',
         paymentMethod: 'MOBILE POOL',
         paymentNumber: phone,
         status: 'pending',
@@ -1323,8 +1333,8 @@ export const dbService = {
         if (!user) throw new Error('Utilisateur non trouvé');
         
         const balanceCommission = Number(user.balanceCommission || 0);
-        if (balanceCommission < 2000) {
-          throw new Error('Le montant minimum pour le retrait des gains est de 2 000 FCFA');
+        if (balanceCommission < 5000) {
+          throw new Error('Le montant minimum pour le retrait des gains est de 5 000 FCFA');
         }
         
         const pullAmount = balanceCommission;
@@ -1340,7 +1350,7 @@ export const dbService = {
           amount: pullAmount,
           userPhone: phone,
           userName: user.name,
-          xbetAccount: 'COMMISSION_RETRAIT',
+          xbetAccount: xbetAccount || 'COMMISSION_RETRAIT',
           paymentMethod: 'MOBILE POOL',
           paymentNumber: phone,
           status: 'pending',
@@ -1423,6 +1433,26 @@ export const dbService = {
         const ldb = getLocalDB();
         if (ldb.users[phone]) {
           ldb.users[phone].role = role;
+          saveLocalDB(ldb);
+        }
+        return;
+      }
+      handleFirestoreError(e, OperationType.WRITE, `users/${phone}`);
+    }
+  },
+
+  async updateUserPartner(phone: string, isPartner: boolean): Promise<void> {
+    try {
+      if (useLocalStorageSandbox) throw new Error('forced offline');
+      const docRef = doc(db, 'users', phone);
+      await updateDoc(docRef, { isPartner });
+    } catch (e) {
+      if (isOfflineOrError(e)) {
+        console.warn("[Firebase Resilient Fallback] Directing updateUserPartner query to LocalStorage");
+        onSupabaseFallbackOccurred?.();
+        const ldb = getLocalDB();
+        if (ldb.users[phone]) {
+          ldb.users[phone].isPartner = isPartner;
           saveLocalDB(ldb);
         }
         return;
@@ -1547,7 +1577,7 @@ export const dbService = {
       let nextAppliedCommission = appliedCommission;
 
       // Apply referral 1% logic on first transition to 'validated'
-      if (status === 'validated' && oldStatus !== 'validated' && !appliedCommission) {
+      if (status === 'validated' && oldStatus !== 'validated' && !appliedCommission && tx.type === 'deposit') {
         const userDoc = await getDoc(doc(db, 'users', tx.userPhone));
         if (userDoc.exists()) {
           const user = userDoc.data() as DBUser;
@@ -1568,7 +1598,7 @@ export const dbService = {
       }
 
       // Decrement/Cancel referral commission if status is changed back from validated
-      if (status !== 'validated' && oldStatus === 'validated' && appliedCommission) {
+      if (status !== 'validated' && oldStatus === 'validated' && appliedCommission && tx.type === 'deposit') {
         const userDoc = await getDoc(doc(db, 'users', tx.userPhone));
         if (userDoc.exists()) {
           const user = userDoc.data() as DBUser;
@@ -1613,7 +1643,7 @@ export const dbService = {
         }
         
         // Referral commission simulation
-        if (status === 'validated' && oldStatus !== 'validated' && !appliedCommission) {
+        if (status === 'validated' && oldStatus !== 'validated' && !appliedCommission && tx.type === 'deposit') {
           const user = ldb.users[tx.userPhone];
           if (user && user.parentPhone) {
             const parent = ldb.users[user.parentPhone];
@@ -1625,7 +1655,7 @@ export const dbService = {
           }
         }
         
-        if (status !== 'validated' && oldStatus === 'validated' && appliedCommission) {
+        if (status !== 'validated' && oldStatus === 'validated' && appliedCommission && tx.type === 'deposit') {
           const user = ldb.users[tx.userPhone];
           if (user && user.parentPhone) {
             const parent = ldb.users[user.parentPhone];

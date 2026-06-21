@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
-  PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert,
+  PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert, Award,
   Edit, Calendar, ChevronDown, Share2, Globe, Trash2
 } from 'lucide-react';
 import { motion } from 'motion/react';
@@ -101,8 +101,15 @@ function playChimeNotification() {
 }
 
 function safeConfirm(message: string): boolean {
+  const start = Date.now();
   try {
-    return window.confirm(message);
+    const res = window.confirm(message);
+    const elapsed = Date.now() - start;
+    if (elapsed < 50) {
+      console.warn('[StarBetPay] window.confirm returned instantly, bypassing sandbox block.');
+      return true;
+    }
+    return res;
   } catch (e) {
     console.warn('[StarBetPay] window.confirm blocked inside sandboxed iframe workspace, auto-confirming action.', e);
     return true;
@@ -254,6 +261,9 @@ export default function App() {
     filleulsCount: 0,
     referralCode: ''
   });
+  const [myReferrals, setMyReferrals] = useState<{ name: string, phone: string, createdAt: string }[]>([]);
+  const [isPayoutModalOpen, setIsPayoutModalOpen] = useState(false);
+  const [payoutXbetAccount, setPayoutXbetAccount] = useState('');
 
   // Admin Dashboard UI State
   const [isAdminMode, setIsAdminMode] = useState(false);
@@ -1084,6 +1094,15 @@ export default function App() {
               ...prev,
               filleulsCount: snapRefs.size || 0
             }));
+            const refsList = snapRefs.docs.map(doc => {
+              const data = doc.data();
+              return {
+                name: data.name || '',
+                phone: data.phone || '',
+                createdAt: data.createdAt || ''
+              };
+            });
+            setMyReferrals(refsList);
           });
 
         } catch (e) {
@@ -1099,6 +1118,23 @@ export default function App() {
             processClientTransactionsUpdate(freshTxs);
             const freshStats = await dbService.getUserStats(user.phone);
             setRefStats(freshStats);
+            
+            // Also update myReferrals locally in sandbox mode
+            const sandboxDbStr = localStorage.getItem('starbetpay_sandbox_db') || '{"users":{}}';
+            try {
+              const sdb = JSON.parse(sandboxDbStr);
+              const refsList = Object.values(sdb.users || {})
+                .filter((u: any) => u.parentPhone === user.phone)
+                .map((u: any) => ({
+                  name: u.name || '',
+                  phone: u.phone || '',
+                  createdAt: u.createdAt || ''
+                }));
+              setMyReferrals(refsList);
+            } catch (jsonErr) {
+              console.warn("Sandbox JSON parse err:", jsonErr);
+            }
+
             const freshCoupons = await dbService.getCoupons();
             if (freshCoupons && freshCoupons.length > 0) {
               if (!isFirstCouponsLoadRef.current) {
@@ -1544,24 +1580,27 @@ export default function App() {
   };
 
   // Action: User requests commission payout
-  const handleWithdrawCommissionGains = async () => {
-    if (refStats.balanceCommission < 2000) {
-      alert('Le montant minimum requis pour retirer vos gains de commission est de 2 000 FCFA.');
+  const handleWithdrawCommissionGains = async (xbetId: string) => {
+    if (!xbetId || !xbetId.trim()) {
+      showToast('Veuillez saisir votre ID 1xBet pour recevoir vos gains.', 'warning');
       return;
     }
 
-    if (!confirm(`Souhaitez-vous vraiment effectuer une demande de retrait pour la totalité de vos gains d'un montant de ${refStats.balanceCommission} FCFA ?`)) {
+    if (refStats.balanceCommission < 5000) {
+      showToast('Le montant minimum requis pour retirer vos gains de commission est de 5 000 FCFA.', 'error');
       return;
     }
 
     setFormLoading(true);
     try {
-      const data = await dbService.requestCommissionPayout(user!.phone);
-      alert(data.transaction ? 'Demande de retrait de gain effectuée avec succès.' : 'Erreur de retrait');
+      const data = await dbService.requestCommissionPayout(user!.phone, xbetId.trim());
+      showToast('Votre demande de retrait de gains de parrainage de ' + (refStats.balanceCommission || 0).toLocaleString() + ' FCFA a été soumise avec succès.', 'success');
+      setIsPayoutModalOpen(false);
+      setPayoutXbetAccount('');
       fetchClientUserData(user!.phone);
     } catch (e: any) {
       console.error(e);
-      alert(e.message || 'Erreur lors de la demande de retrait.');
+      showToast(e.message || 'Erreur lors de la demande de retrait.', 'error');
     } finally {
       setFormLoading(false);
     }
@@ -2182,6 +2221,22 @@ export default function App() {
                       disabled={isAuthLoading}
                     />
                   </div>
+
+                  {authTab === 'register' && (
+                    <div>
+                      <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-1">
+                        Code de parrainage / Promo <span className="text-[10px] text-gray-500 font-normal normal-case">(Optionnel)</span>
+                      </label>
+                      <input 
+                        type="text" 
+                        placeholder="Entrez le code ou numéro du parrain"
+                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-cyan-400 font-mono placeholder-gray-600 focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
+                        value={authForm.parentPhone}
+                        onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
+                        disabled={isAuthLoading}
+                      />
+                    </div>
+                  )}
 
 
 
@@ -3310,6 +3365,169 @@ export default function App() {
                   </div>
                 )}
 
+                {activeTab === 'partner' && user?.isPartner && (
+                  <div className="space-y-4 animate-fade-in pb-12 text-left">
+                    <div className="flex items-center gap-2">
+                      <div className="w-9 h-9 bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center rounded-xl text-indigo-400">
+                        <Award size={18} />
+                      </div>
+                      <div>
+                        <h3 className="text-base font-black font-display text-gray-100">Espace Partenaire</h3>
+                        <p className="text-[10px] text-gray-400 tracking-wider">Parrainez des joueurs, gagnez 1% de commissions.</p>
+                      </div>
+                    </div>
+
+                    {/* Commissions details */}
+                    <div className="grid grid-cols-2 gap-3 mt-2">
+                       <div className="bg-[#111a33]/90 border border-slate-800 p-3 rounded-2xl flex flex-col gap-1">
+                        <span className="text-[9px] text-gray-400 uppercase font-black">Disponible</span>
+                        <span className="text-sm font-extrabold text-white font-mono">{(refStats.balanceCommission || 0).toLocaleString()} FCFA</span>
+                        {refStats.balanceCommission >= 5000 ? (
+                          <button
+                            onClick={() => setIsPayoutModalOpen(true)}
+                            disabled={formLoading}
+                            className="mt-1.5 w-full py-1 text-[9px] font-black uppercase text-center bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-[#070e20] rounded-lg cursor-pointer transition-all"
+                          >
+                            Retirer
+                          </button>
+                        ) : (
+                          <span className="text-[8px] text-gray-500 mt-1 font-semibold leading-none">Min. 5 000 FCFA</span>
+                        )}
+                      </div>
+
+                      <div className="bg-[#111a33]/90 border border-slate-800 p-3 rounded-2xl flex flex-col gap-1">
+                        <span className="text-[9px] text-gray-400 uppercase font-black">Retiré</span>
+                        <span className="text-sm font-extrabold text-gray-300 font-mono">{(refStats.balanceCommissionWithdrawn || 0).toLocaleString()} FCFA</span>
+                        <div className="mt-2 text-[9px] text-indigo-400 font-semibold">{refStats.filleulsCount} Filleuls inscrits</div>
+                      </div>
+                    </div>
+
+                    {/* Invitation Cards */}
+                    <div className="bg-[#111a33]/90 border border-slate-850 p-4 rounded-2xl space-y-3.5 shadow-xl">
+                      <h4 className="text-xs font-extrabold text-[#d1d5db] uppercase font-display tracking-wider border-b border-slate-800/65 pb-2">Mes Liens d'Invitation</h4>
+                      
+                      {/* Code frame */}
+                      <div className="space-y-1">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase">Code de Parrainage</span>
+                        <div className="flex bg-slate-950/60 border border-slate-800 rounded-xl overflow-hidden p-1 items-center justify-between">
+                          <code className="text-xs font-mono font-black text-white uppercase px-2">{refStats.referralCode || user?.phone}</code>
+                          <button
+                            onClick={() => {
+                              navigator.clipboard.writeText(refStats.referralCode || user?.phone || '');
+                              showToast('Code parrain recopié dans le presse-papier ! 📋', 'success');
+                            }}
+                            className="p-1 px-3 bg-[#1e2a4a] hover:bg-[#283863] border border-cyan-500/10 text-cyan-400 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Link frame */}
+                      <div className="space-y-1">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase">Lien d'Affiliation Direct</span>
+                        <div className="flex bg-slate-950/60 border border-slate-800 rounded-xl overflow-hidden p-1 items-center justify-between">
+                          <input
+                            type="text"
+                            readOnly
+                            value={`${window.location.origin}/?ref=${refStats.referralCode || user?.phone}`}
+                            className="bg-transparent border-none text-[10px] text-gray-400 font-mono focus:outline-none w-full px-2"
+                          />
+                          <button
+                            onClick={() => {
+                              const inviteLink = `${window.location.origin}/?ref=${refStats.referralCode || user?.phone}`;
+                              navigator.clipboard.writeText(inviteLink);
+                              showToast('Lien d\'affiliation recopié ! 📋', 'success');
+                            }}
+                            className="p-1 px-3 bg-[#1e2a4a] hover:bg-[#283863] border border-cyan-500/10 text-cyan-400 rounded-lg text-[9px] font-black uppercase transition-all cursor-pointer"
+                          >
+                            Copier
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Referrals List Panel */}
+                    <div className="bg-[#111a33]/90 border border-slate-850 p-4 rounded-2xl space-y-3 shadow-xl">
+                      <div className="flex justify-between items-center border-b border-slate-800/65 pb-2">
+                        <h4 className="text-xs font-extrabold text-[#d1d5db] uppercase font-display tracking-wider">Membres Recommandés</h4>
+                        <span className="text-[9px] bg-slate-950 border border-slate-800 text-gray-400 px-2 py-0.5 rounded-full font-bold">{myReferrals.length} Filleuls</span>
+                      </div>
+
+                      {myReferrals.length === 0 ? (
+                        <div className="text-center py-6 text-gray-500 text-[11px] font-medium">
+                          Vous n'avez pas encore parrainé d'utilisateurs. Partagez votre lien d'invitation pour commencer à gagner ! 🤝
+                        </div>
+                      ) : (
+                        <div className="space-y-2 max-h-[180px] overflow-y-auto pr-1 scrollbar-none">
+                          {myReferrals.map((r, i) => (
+                            <div key={i} className="flex justify-between items-center bg-slate-950/25 p-2 rounded-xl border border-slate-850 text-xs text-left">
+                              <div className="flex flex-col gap-0.5">
+                                <span className="font-extrabold text-white uppercase">{r.name}</span>
+                                <span className="font-mono text-[9px] text-[#22d3ee]/60">{r.phone}</span>
+                              </div>
+                              <span className="text-[9px] text-gray-500 font-semibold">{r.createdAt ? r.createdAt.substring(0, 10) : ''}</span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Modal Retrait Commission */}
+                    {isPayoutModalOpen && (
+                      <div className="fixed inset-0 z-55 flex items-center justify-center p-4 bg-[#070b19]/85 backdrop-blur-sm animate-fade-in">
+                        <div className="w-full max-w-sm bg-[#0e162d] border border-slate-800 rounded-2xl p-5 shadow-2xl relative text-left">
+                          <h4 className="text-sm font-black font-display text-white mb-2 uppercase tracking-wide flex items-center gap-2">
+                             💸 Retrait des Gains de Parrainage
+                          </h4>
+                          <p className="text-[11px] text-gray-400 mb-4 leading-relaxed">
+                            Vous allez lancer une demande de retrait de vos gains accumulés d'un montant de <strong className="text-emerald-400 font-mono">{(refStats.balanceCommission || 0).toLocaleString()} FCFA</strong>.
+                          </p>
+
+                          <div className="space-y-4">
+                            <div>
+                              <label className="block text-gray-400 text-[10px] uppercase tracking-wider font-extrabold mb-1.5">
+                                Votre ID 1XBET de Retrait <span className="text-red-500">*</span>
+                              </label>
+                              <input 
+                                type="text"
+                                placeholder="Saisir votre ID compte 1xBet..."
+                                className="w-full bg-[#070e20] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-cyan-400 font-bold font-mono placeholder-gray-600 focus:outline-none focus:border-cyan-500 transition-colors"
+                                value={payoutXbetAccount}
+                                onChange={(e) => setPayoutXbetAccount(e.target.value)}
+                              />
+                              <p className="text-[10px] text-gray-500 mt-1.5 leading-normal">
+                                Vos gains seront transférés directement sur ce compte de joueur après vérification réglementaire par l'administration.
+                              </p>
+                            </div>
+
+                            <div className="flex gap-2.5 pt-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setIsPayoutModalOpen(false);
+                                  setPayoutXbetAccount('');
+                                }}
+                                className="flex-1 py-2 text-xs font-bold bg-[#1b253b] hover:bg-slate-800 text-gray-300 rounded-xl cursor-pointer transition-all"
+                              >
+                                Annuler
+                              </button>
+                              <button
+                                type="button"
+                                disabled={formLoading}
+                                onClick={() => handleWithdrawCommissionGains(payoutXbetAccount)}
+                                className="flex-1 py-2 text-xs font-black bg-emerald-500 hover:bg-emerald-450 text-[#070e20] rounded-xl cursor-pointer disabled:opacity-50 transition-all"
+                              >
+                                {formLoading ? 'Envoi...' : 'Confirmer'}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
               </div>
             )}
 
@@ -4050,6 +4268,24 @@ export default function App() {
                     }
                   };
 
+                  const handleToggleUserPartner = async (phone: string, name: string, currentIsPartner: boolean) => {
+                    const nextIsPartner = !currentIsPartner;
+                    const confirmMsg = nextIsPartner
+                      ? `Voulez-vous vraiment promouvoir ${name} (${phone}) au rang de Partenaire ? Il obtiendra son code/lien d'invitation et pourra suivre ses filleuls.`
+                      : `Voulez-vous vraiment retirer les droits de Partenaire de ${name} (${phone}) ?`;
+                    
+                    if (!safeConfirm(confirmMsg)) {
+                      return;
+                    }
+                    try {
+                      await dbService.updateUserPartner(phone, nextIsPartner);
+                      fetchAdminTransactions();
+                      showToast(`Le statut partenaire de ${name} a été mis à jour avec succès ! 🎉`, 'success');
+                    } catch (e: any) {
+                      showToast("Erreur lors de la mise à jour du statut partenaire.", 'error');
+                    }
+                  };
+
                   return (
                     <div className="space-y-4 animate-fade-in pb-10">
                       <div className="flex items-center justify-between">
@@ -4083,7 +4319,7 @@ export default function App() {
                           filteredUsersList.map((usr) => {
                             const isUserActive = transactions.some(t => t.userPhone === usr.phone && t.status === 'validated');
                             return (
-                              <div key={usr.phone} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 shadow-md">
+                              <div key={usr.phone} className="bg-[#111a33] border border-slate-800 rounded-2xl p-4 flex flex-col gap-3 shadow-md pb-4">
                                 <div className="flex justify-between items-start">
                                   <div>
                                     <div className="flex items-center gap-1.5 flex-wrap">
@@ -4096,8 +4332,18 @@ export default function App() {
                                       <span className={`text-[8px] border px-1.5 py-0.2 rounded font-bold uppercase ${usr.role === 'admin' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'}`}>
                                         {usr.role === 'admin' ? 'Admin' : 'Client'}
                                       </span>
+                                      {usr.isPartner && (
+                                        <span className="text-[8px] bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.2 rounded font-bold uppercase">
+                                          Partenaire 🤝
+                                        </span>
+                                      )}
                                     </div>
                                     <p className="text-[11px] font-mono text-cyan-400 font-semibold mt-0.5">{usr.phone}</p>
+                                    {usr.parentPhone && (
+                                      <p className="text-[9px] text-gray-500 font-medium mt-1">
+                                        Parrainé par : <span className="font-mono text-gray-400 bg-slate-900 border border-slate-800 px-1 rounded">{usr.parentPhone}</span>
+                                      </p>
+                                    )}
                                   </div>
                                   <div className="flex gap-2">
                                     {usr.phone !== user?.phone && (
@@ -4109,6 +4355,13 @@ export default function App() {
                                         <ShieldAlert size={14} />
                                       </button>
                                     )}
+                                    <button
+                                      onClick={() => handleToggleUserPartner(usr.phone, usr.name, !!usr.isPartner)}
+                                      className={`p-2 border rounded-xl transition-all cursor-pointer ${usr.isPartner ? 'border-indigo-500/25 bg-indigo-500/5 text-indigo-400 hover:bg-indigo-500/15' : 'border-slate-800 bg-slate-900 text-gray-500 hover:text-white hover:bg-slate-800'}`}
+                                      title={usr.isPartner ? "Retirer de la promotion partenaire" : "Promouvoir au statut partenaire"}
+                                    >
+                                      <Award size={14} />
+                                    </button>
                                     {usr.role !== 'admin' && (
                                       <button
                                         onClick={() => handleDeleteUserClick(usr.phone, usr.name)}
@@ -4121,7 +4374,26 @@ export default function App() {
                                   </div>
                                 </div>
 
-
+                                {usr.isPartner && (
+                                  <div className="mt-1 pt-2 border-t border-slate-800/60 flex flex-col gap-1.5 text-[11px] text-gray-400">
+                                    <div className="flex justify-between items-center bg-slate-950/40 p-2 rounded-xl border border-slate-850">
+                                      <span>Code d'invitation :</span>
+                                      <span className="font-mono font-extrabold text-cyan-300 bg-cyan-950/20 px-1.5 py-0.5 border border-cyan-800/20 rounded">{usr.referralCode || usr.phone}</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span>Filleuls parrainés :</span>
+                                      <span className="text-gray-200 font-extrabold">{allUsers.filter(u => u.parentPhone === usr.phone).length} inscrits</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span>Commissions perçues :</span>
+                                      <span className="font-semibold text-emerald-400">{(usr.balanceCommission || 0).toLocaleString()} FCFA</span>
+                                    </div>
+                                    <div className="flex justify-between">
+                                      <span>Commissions payées :</span>
+                                      <span className="font-semibold text-gray-400">{(usr.balanceCommissionWithdrawn || 0).toLocaleString()} FCFA</span>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                             );
                           })
@@ -5327,12 +5599,13 @@ export default function App() {
       {/* BOTTOM MOBILE NAV BAR */}
       {/* ------------------------------------------- */}
       {user && !isAdminMode && (
-        <nav className="fixed bottom-0 left-1/2 translate-x-[-50%] w-full max-w-[480px] h-16 bg-[#0c1228]/95 border-t border-cyan-500/10 grid grid-cols-5 text-center text-[10px] text-gray-400 font-semibold z-40 backdrop-blur-md">
+        <nav className={`fixed bottom-0 left-1/2 translate-x-[-50%] w-full max-w-[480px] h-16 bg-[#0c1228]/95 border-t border-cyan-500/10 grid ${user.isPartner ? 'grid-cols-6' : 'grid-cols-5'} text-center text-[10px] text-gray-400 font-semibold z-40 backdrop-blur-md`}>
           {[
             { id: 'home', label: 'Accueil', icon: Sparkles },
             { id: 'deposit', label: 'Dépôt', icon: ArrowUpRight },
             { id: 'pronos', label: 'Pronos', icon: Star },
             { id: 'withdrawal', label: 'Retrait', icon: Download },
+            ...(user.isPartner ? [{ id: 'partner', label: 'Invite', icon: Award }] : []),
             { id: 'history', label: 'Historique', icon: BarChart3 }
           ].map((nav) => {
             const IconComponent = nav.icon;

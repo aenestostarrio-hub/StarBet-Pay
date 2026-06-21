@@ -62,12 +62,12 @@ service cloud.firestore {
       );
 
       // Protect updates by owners or administrators
-      allow update: if isValidUser(incoming()) && (
-        isAdmin() || 
-        (
+      allow update: if isAdmin() || (
+        isValidUser(incoming()) && (
           incoming().role == existing().role && 
           incoming().balanceCommission == existing().balanceCommission && 
           incoming().balanceCommissionWithdrawn == existing().balanceCommissionWithdrawn &&
+          (existing().get('isPartner', false) == incoming().get('isPartner', false)) &&
           (
             isProfileOwner(phone) || 
             (request.auth != null && 
@@ -84,7 +84,7 @@ service cloud.firestore {
     // Direct user validation blueprint helper
     function isValidUser(user) {
       return user.keys().hasAll(['phone', 'name', 'role', 'passwordHash', 'referralCode', 'balanceCommission', 'balanceCommissionWithdrawn', 'mfaEnabled', 'createdAt']) &&
-             user.keys().size() <= 13 &&
+             user.keys().size() <= 14 &&
              user.phone is string && user.phone.size() >= 5 && user.phone.size() <= 128 &&
              user.name is string && user.name.size() >= 2 && user.name.size() <= 100 &&
              (user.role == 'user' || user.role == 'admin') &&
@@ -93,7 +93,9 @@ service cloud.firestore {
              user.balanceCommission is number &&
              user.balanceCommissionWithdrawn is number &&
              user.mfaEnabled is bool &&
-             user.createdAt is string;
+             user.createdAt is string &&
+             (!user.keys().hasAll(['isPartner']) || user.isPartner is bool) &&
+             (!user.keys().hasAll(['parentPhone']) || user.parentPhone is string || user.parentPhone == null);
     }
 
     // ==========================================

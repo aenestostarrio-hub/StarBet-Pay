@@ -11,6 +11,7 @@
         "passwordHash": { "type": "string", "description": "Sha256 hash of the password" },
         "parentPhone": { "type": "string", "description": "Optional phone number of the sponsoring user" },
         "referralCode": { "type": "string", "description": "Unique referral code for sponsorship" },
+        "isPartner": { "type": "boolean", "description": "Whether the user has been promoted to partner" },
         "balanceCommission": { "type": "number", "description": "Accrued commission balance" },
         "balanceCommissionWithdrawn": { "type": "number", "description": "Withdrawn commission amount" },
         "mfaEnabled": { "type": "boolean", "description": "Whether two-factor authentication is configured" },

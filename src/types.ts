@@ -2,6 +2,7 @@ export interface DBUser {
   phone: string;
   name: string;
   role: 'admin' | 'user';
+  isPartner?: boolean;
   passwordHash: string;
   parentPhone?: string; // sponsor phone
   referralCode: string;

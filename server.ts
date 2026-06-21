@@ -553,13 +553,25 @@ async function startServer() {
       return res.status(400).json({ error: 'Ce numéro de téléphone est déjà enregistré' });
     }
 
+    let resolvedParentPhone: string | undefined = undefined;
+    if (parentPhone) {
+      const trimmedCode = parentPhone.trim();
+      const parentUser = Object.values(db.users).find(u => u.referralCode === trimmedCode || u.phone === trimmedCode);
+      if (parentUser && parentUser.isPartner === true) {
+        resolvedParentPhone = parentUser.phone;
+      } else {
+        console.warn(`[Register API] Sponsoring code ${trimmedCode} is not linked to a validated partner account`);
+      }
+    }
+
     const newUser: DBUser = {
       phone,
       name,
       role: 'user',
       passwordHash: password,
-      parentPhone: parentPhone ? parentPhone.trim() : undefined,
+      parentPhone: resolvedParentPhone,
       referralCode: phone,
+      isPartner: false,
       balanceCommission: 0,
       balanceCommissionWithdrawn: 0,
       mfaEnabled: true,
