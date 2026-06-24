@@ -49,6 +49,25 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // For document navigations (index.html), use Network-First strategy to avoid stale JS bundle white pages
+  if (req.mode === 'navigate') {
+    event.respondWith(
+      fetch(req)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(req, responseClone));
+          }
+          return networkResponse;
+        })
+        .catch(() => {
+          // Offline fallback
+          return caches.match(OFFLINE_URL);
+        })
+    );
+    return;
+  }
+
   event.respondWith(
     caches.match(req).then((cachedResponse) => {
       if (cachedResponse) {

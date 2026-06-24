@@ -1323,6 +1323,16 @@ export const dbService = {
       };
 
       await setDoc(doc(db, 'transactions', txId), newTx);
+
+      // Trigger Email Notification via background api
+      fetch('/api/email/notify-new-transaction', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ tx: newTx })
+      }).catch(err => {
+        console.warn('[Email Background Dispatch Error - Commission Payout]:', err);
+      });
+
       return { user, transaction: newTx };
     } catch (e) {
       if (isOfflineOrError(e)) {
@@ -1363,6 +1373,16 @@ export const dbService = {
         if (!ldb.transactions) ldb.transactions = [];
         ldb.transactions.push(newTx);
         saveLocalDB(ldb);
+
+        // Trigger Email Notification via background api
+        fetch('/api/email/notify-new-transaction', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tx: newTx })
+        }).catch(err => {
+          console.warn('[Email Background Dispatch Error - Commission Payout Fallback]:', err);
+        });
+
         return { user, transaction: newTx };
       }
       handleFirestoreError(e, OperationType.WRITE, `users/${phone}`);

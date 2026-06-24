@@ -251,6 +251,27 @@ function broadcastNotification(notification: DBNotification) {
   });
 }
 
+// App Config dynamic load directly from Firestore if available
+async function getAppConfig(): Promise<AppConfig> {
+  const db = getDB();
+  let config = (db.config || {}) as AppConfig;
+
+  if (firebaseAdminApp) {
+    try {
+      const fsDb = firebaseAdmin.firestore(firebaseAdminApp);
+      const docSnap = await fsDb.collection('config').doc('app').get();
+      if (docSnap.exists) {
+        const firestoreConfig = docSnap.data() as AppConfig;
+        console.log('[AppConfig] Successfully loaded configuration directly from Firestore.');
+        return { ...config, ...firestoreConfig };
+      }
+    } catch (e) {
+      console.warn('[AppConfig] Failed to fetch config from Firestore, falling back to local file:', e);
+    }
+  }
+  return config;
+}
+
 // Unified push messaging logic targeting multiple device devices
 async function sendFcmNotification(phone: string, title: string, message: string, extraData: any = {}) {
   if (!isFcmReady || !firebaseAdminApp) {
@@ -258,14 +279,40 @@ async function sendFcmNotification(phone: string, title: string, message: string
     return;
   }
   try {
+    let tokens: FCMToken[] = [];
+    
+    // Retrieve tokens from Firestore directly for live PWA multi-device support
+    try {
+      const fsDb = firebaseAdmin.firestore(firebaseAdminApp);
+      const snapshot = await fsDb.collection('fcmTokens').get();
+      snapshot.forEach((doc: any) => {
+        tokens.push(doc.data() as FCMToken);
+      });
+      console.log(`[FCM Service] Fetched ${tokens.length} tokens directly from Firestore.`);
+    } catch (e) {
+      console.warn('[FCM Service] Failed to read fcmTokens from Firestore, falling back to local database.json:', e);
+      const db = getDB();
+      tokens = db.fcmTokens || [];
+    }
+
+    // Resolve recipient tokens
     const db = getDB();
-    const tokens = db.fcmTokens ? db.fcmTokens.filter(t => t.phone === phone) : [];
-    if (tokens.length === 0) {
+    const recipientTokens = tokens.filter(t => {
+      if (phone === 'admin') {
+        // If the recipient is admin, resolve standard admin phones
+        const localUser = db.users[t.phone];
+        const isAdmin = t.phone === 'admin' || t.phone === '0197656263' || (localUser && localUser.role === 'admin');
+        return isAdmin;
+      }
+      return t.phone === phone;
+    });
+
+    if (recipientTokens.length === 0) {
       console.log(`[FCM Service] No token matches found in registry mapped to: ${phone}`);
       return;
     }
 
-    const payload = tokens.map(async (tok) => {
+    const payload = recipientTokens.map(async (tok) => {
       try {
         await firebaseAdmin.messaging(firebaseAdminApp).send({
           token: tok.token,
@@ -291,10 +338,21 @@ async function sendFcmNotification(phone: string, title: string, message: string
         const erMsg = tokenError?.message || '';
         if (erMsg.includes('registration-token-not-registered') || erMsg.includes('not-found') || erMsg.includes('invalid-registration-token')) {
           console.log(`[FCM Autoclear] De-registering unresponsive client endpoint token: ${tok.id}`);
+          
+          // Clear from local DB
           const curDb = getDB();
           if (curDb.fcmTokens) {
             curDb.fcmTokens = curDb.fcmTokens.filter(t => t.id !== tok.id);
             saveDB(curDb);
+          }
+          
+          // Also clear from Firestore if active
+          try {
+            const fsDb = firebaseAdmin.firestore(firebaseAdminApp);
+            await fsDb.collection('fcmTokens').doc(tok.token).delete();
+            console.log(`[FCM Autoclear] Token removed from Firestore: ${tok.token}`);
+          } catch (fsDelErr) {
+            // Ignored if document already deleted
           }
         }
       }
@@ -352,8 +410,7 @@ function notifyAdminsOfNewTransaction(tx: DBTransaction) {
 
 // Function to send reusable email notifications to the admin via SMTP or Resend API
 async function sendAdminEmailNotification(subject: string, htmlMessage: string): Promise<boolean> {
-  const db = getDB();
-  const config = (db.config || {}) as AppConfig;
+  const config = await getAppConfig();
 
   // Resolve config with fallback to environment variables
   const adminEmail = config.adminEmailRecipients || process.env.ADMIN_EMAIL || 'aenestostarrio@gmail.com';
@@ -645,8 +702,7 @@ async function startServer() {
   app.post('/api/email/test', async (req, res) => {
     const { message, customSmtpHost, customSmtpPort, customSmtpUser, customSmtpPass, customResendApiKey, customAdminEmail } = req.body;
     
-    const db = getDB();
-    const config = (db.config || {}) as AppConfig;
+    const config = await getAppConfig();
     
     const adminEmail = customAdminEmail || config.adminEmailRecipients || process.env.ADMIN_EMAIL || 'aenestostarrio@gmail.com';
     const senderName = config.emailSenderName || process.env.SENDER_NAME || 'StarBetPay';
@@ -738,12 +794,13 @@ async function startServer() {
 
     try {
       const isDeposit = tx.type === 'deposit';
-      const typeLabel = isDeposit ? '🟢 DEMANDE DE DÉPÔT' : '🔴 DEMANDE DE RETRAIT';
-      const subject = `⚠️ NOUVELLE TRANSACTION STARBETPAY - [${isDeposit ? 'DEPOT' : 'RETRAIT'}] ${Number(tx.amount).toLocaleString('fr-FR')} FCFA`;
+      const isPayout = tx.type === 'commission_payout';
+      const typeLabel = isDeposit ? '🟢 DEMANDE DE DÉPÔT' : (isPayout ? '🎁 RETRAIT DE COMMISSIONS' : '🔴 DEMANDE DE RETRAIT');
+      const subject = `⚠️ NOUVELLE TRANSACTION STARBETPAY - [${isDeposit ? 'DEPOT' : (isPayout ? 'COMMISSION' : 'RETRAIT')}] ${Number(tx.amount).toLocaleString('fr-FR')} FCFA`;
 
       const emailHtml = `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e2e8f0; border-radius: 16px; overflow: hidden; background-color: #ffffff; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-          <div style="background-color: ${isDeposit ? '#10b981' : '#ef4444'}; padding: 24px; text-align: center; color: #ffffff;">
+          <div style="background-color: ${isDeposit ? '#10b981' : (isPayout ? '#8b5cf6' : '#ef4444')}; padding: 24px; text-align: center; color: #ffffff;">
             <h1 style="margin: 0; font-size: 20px; font-weight: bold; letter-spacing: 0.5px;">📥 NOUVELLE DEMANDE SUR STARBETPAY</h1>
             <p style="margin: 4px 0 0 0; font-size: 13px; opacity: 0.9;">Un client vient de soumettre une transaction en attente de validation</p>
           </div>
@@ -807,9 +864,9 @@ async function startServer() {
   });
 
   // Payment configuration endpoints
-  app.get('/api/config', (req, res) => {
-    const db = getDB();
-    res.json(db.config);
+  app.get('/api/config', async (req, res) => {
+    const config = await getAppConfig();
+    res.json(config);
   });
 
   app.post('/api/payment-methods', (req, res) => {

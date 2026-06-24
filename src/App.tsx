@@ -3365,7 +3365,7 @@ export default function App() {
                   </div>
                 )}
 
-                {activeTab === 'partner' && user?.isPartner && (
+                {activeTab === 'partner' && (
                   <div className="space-y-4 animate-fade-in pb-12 text-left">
                     <div className="flex items-center gap-2">
                       <div className="w-9 h-9 bg-indigo-500/10 border border-indigo-500/30 flex items-center justify-center rounded-xl text-indigo-400">
@@ -4332,11 +4332,6 @@ export default function App() {
                                       <span className={`text-[8px] border px-1.5 py-0.2 rounded font-bold uppercase ${usr.role === 'admin' ? 'bg-amber-500/10 text-amber-400 border-amber-500/20' : 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20'}`}>
                                         {usr.role === 'admin' ? 'Admin' : 'Client'}
                                       </span>
-                                      {usr.isPartner && (
-                                        <span className="text-[8px] bg-indigo-500/15 text-indigo-400 border border-indigo-500/20 px-1.5 py-0.2 rounded font-bold uppercase">
-                                          Partenaire 🤝
-                                        </span>
-                                      )}
                                     </div>
                                     <p className="text-[11px] font-mono text-cyan-400 font-semibold mt-0.5">{usr.phone}</p>
                                     {usr.parentPhone && (
@@ -4355,13 +4350,6 @@ export default function App() {
                                         <ShieldAlert size={14} />
                                       </button>
                                     )}
-                                    <button
-                                      onClick={() => handleToggleUserPartner(usr.phone, usr.name, !!usr.isPartner)}
-                                      className={`p-2 border rounded-xl transition-all cursor-pointer ${usr.isPartner ? 'border-indigo-500/25 bg-indigo-500/5 text-indigo-400 hover:bg-indigo-500/15' : 'border-slate-800 bg-slate-900 text-gray-500 hover:text-white hover:bg-slate-800'}`}
-                                      title={usr.isPartner ? "Retirer de la promotion partenaire" : "Promouvoir au statut partenaire"}
-                                    >
-                                      <Award size={14} />
-                                    </button>
                                     {usr.role !== 'admin' && (
                                       <button
                                         onClick={() => handleDeleteUserClick(usr.phone, usr.name)}
@@ -4374,26 +4362,24 @@ export default function App() {
                                   </div>
                                 </div>
 
-                                {usr.isPartner && (
-                                  <div className="mt-1 pt-2 border-t border-slate-800/60 flex flex-col gap-1.5 text-[11px] text-gray-400">
-                                    <div className="flex justify-between items-center bg-slate-950/40 p-2 rounded-xl border border-slate-850">
-                                      <span>Code d'invitation :</span>
-                                      <span className="font-mono font-extrabold text-cyan-300 bg-cyan-950/20 px-1.5 py-0.5 border border-cyan-800/20 rounded">{usr.referralCode || usr.phone}</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span>Filleuls parrainés :</span>
-                                      <span className="text-gray-200 font-extrabold">{allUsers.filter(u => u.parentPhone === usr.phone).length} inscrits</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span>Commissions perçues :</span>
-                                      <span className="font-semibold text-emerald-400">{(usr.balanceCommission || 0).toLocaleString()} FCFA</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                      <span>Commissions payées :</span>
-                                      <span className="font-semibold text-gray-400">{(usr.balanceCommissionWithdrawn || 0).toLocaleString()} FCFA</span>
-                                    </div>
+                                <div className="mt-1 pt-2 border-t border-slate-800/60 flex flex-col gap-1.5 text-[11px] text-gray-400">
+                                  <div className="flex justify-between items-center bg-slate-950/40 p-2 rounded-xl border border-slate-850">
+                                    <span>Code d'invitation :</span>
+                                    <span className="font-mono font-extrabold text-cyan-300 bg-cyan-950/20 px-1.5 py-0.5 border border-cyan-800/20 rounded">{usr.referralCode || usr.phone}</span>
                                   </div>
-                                )}
+                                  <div className="flex justify-between">
+                                    <span>Filleuls parrainés :</span>
+                                    <span className="text-gray-200 font-extrabold">{allUsers.filter(u => u.parentPhone === usr.phone).length} inscrits</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Commissions perçues :</span>
+                                    <span className="font-semibold text-emerald-400">{(usr.balanceCommission || 0).toLocaleString()} FCFA</span>
+                                  </div>
+                                  <div className="flex justify-between">
+                                    <span>Commissions payées :</span>
+                                    <span className="font-semibold text-gray-400">{(usr.balanceCommissionWithdrawn || 0).toLocaleString()} FCFA</span>
+                                  </div>
+                                </div>
                               </div>
                             );
                           })
@@ -5599,13 +5585,13 @@ export default function App() {
       {/* BOTTOM MOBILE NAV BAR */}
       {/* ------------------------------------------- */}
       {user && !isAdminMode && (
-        <nav className={`fixed bottom-0 left-1/2 translate-x-[-50%] w-full max-w-[480px] h-16 bg-[#0c1228]/95 border-t border-cyan-500/10 grid ${user.isPartner ? 'grid-cols-6' : 'grid-cols-5'} text-center text-[10px] text-gray-400 font-semibold z-40 backdrop-blur-md`}>
+        <nav className="fixed bottom-0 left-1/2 translate-x-[-50%] w-full max-w-[480px] h-16 bg-[#0c1228]/95 border-t border-cyan-500/10 grid grid-cols-6 text-center text-[10px] text-gray-400 font-semibold z-40 backdrop-blur-md">
           {[
             { id: 'home', label: 'Accueil', icon: Sparkles },
             { id: 'deposit', label: 'Dépôt', icon: ArrowUpRight },
             { id: 'pronos', label: 'Pronos', icon: Star },
             { id: 'withdrawal', label: 'Retrait', icon: Download },
-            ...(user.isPartner ? [{ id: 'partner', label: 'Invite', icon: Award }] : []),
+            { id: 'partner', label: 'Invite', icon: Award },
             { id: 'history', label: 'Historique', icon: BarChart3 }
           ].map((nav) => {
             const IconComponent = nav.icon;
