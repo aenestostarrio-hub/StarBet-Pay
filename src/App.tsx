@@ -429,6 +429,16 @@ export default function App() {
     success?: boolean;
     message?: string;
   } | null>(null);
+
+  // States for Broadcasting push notifications to all registered devices
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastStatus, setBroadcastStatus] = useState<{
+    loading: boolean;
+    success?: boolean;
+    message?: string;
+  } | null>(null);
+
   const [paymentMethodForm, setPaymentMethodForm] = useState({
     name: '',
     number: '',
@@ -1691,6 +1701,51 @@ export default function App() {
     }
   };
 
+  const handleBroadcastPush = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!broadcastTitle.trim() || !broadcastMessage.trim()) {
+      showToast('Veuillez remplir le titre et le message de la notification.', 'warning');
+      return;
+    }
+    setBroadcastStatus({ loading: true });
+    try {
+      const res = await fetch('/api/fcm/broadcast', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          phone: user.phone,
+          title: broadcastTitle.trim(),
+          message: broadcastMessage.trim()
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setBroadcastStatus({
+          loading: false,
+          success: true,
+          message: 'Notification push diffusée avec succès à tous les appareils enregistrés ! 🚀'
+        });
+        showToast('Notification push globale envoyée ! 🎉', 'success');
+        setBroadcastTitle('');
+        setBroadcastMessage('');
+      } else {
+        setBroadcastStatus({
+          loading: false,
+          success: false,
+          message: data.error || 'Erreur lors de la diffusion.'
+        });
+        showToast("Échec de la diffusion.", 'error');
+      }
+    } catch (err: any) {
+      setBroadcastStatus({
+        loading: false,
+        success: false,
+        message: err.message || 'Impossible de se connecter au serveur.'
+      });
+      showToast("Erreur de connexion.", 'error');
+    }
+  };
+
   // Action: Admin adds or edits a payment method
   const handleAddPaymentMethod = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -2475,6 +2530,65 @@ export default function App() {
                       >
                         Demander Retrait
                       </button>
+                    </div>
+
+                    {/* APERÇU PARRAINAGE CARD */}
+                    <div className="bg-gradient-to-br from-[#121c38] to-[#0b1226] border border-indigo-500/10 rounded-3xl p-5 shadow-2xl space-y-4 animate-fade-in relative overflow-hidden text-left">
+                      {/* Subtle ambient blur */}
+                      <div className="absolute top-0 right-0 w-32 h-32 bg-indigo-500/5 rounded-full blur-2xl pointer-events-none"></div>
+                      
+                      <div className="flex justify-between items-center pb-3 border-b border-slate-800">
+                        <div className="flex items-center gap-2">
+                          <div className="p-1.5 rounded-lg bg-indigo-500/10 text-indigo-400">
+                            <Users size={16} />
+                          </div>
+                          <div>
+                            <h4 className="text-xs font-black font-display uppercase tracking-wider text-indigo-400">
+                              Mon Parrainage STARBETPAY 🎁
+                            </h4>
+                            <p className="text-[9px] text-gray-400">Suivez vos gains d'affiliation en temps réel</p>
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => setActiveTab('partner')}
+                          className="flex items-center gap-1 text-[10px] font-black text-cyan-400 hover:text-cyan-300 bg-cyan-500/5 hover:bg-cyan-500/10 px-2.5 py-1 rounded-xl border border-cyan-500/10 transition-all cursor-pointer"
+                        >
+                          <span>Gérer</span>
+                          <ArrowUpRight size={12} />
+                        </button>
+                      </div>
+
+                      {/* Stats Grid */}
+                      <div className="grid grid-cols-3 gap-2 text-center">
+                        <div className="bg-[#0a0f20]/60 border border-slate-800/80 rounded-2xl p-2.5">
+                          <span className="block text-[8px] text-gray-400 uppercase tracking-wider font-bold mb-1">Gains Totaux</span>
+                          <span className="text-[11px] font-black font-mono text-cyan-400 break-words">
+                            {((refStats.balanceCommission || 0) + (refStats.balanceCommissionWithdrawn || 0)).toLocaleString()} F
+                          </span>
+                        </div>
+
+                        <div className="bg-[#0a0f20]/60 border border-slate-800/80 rounded-2xl p-2.5">
+                          <span className="block text-[8px] text-gray-400 uppercase tracking-wider font-bold mb-1">Total Retiré</span>
+                          <span className="text-[11px] font-black font-mono text-gray-300 break-words">
+                            {(refStats.balanceCommissionWithdrawn || 0).toLocaleString()} F
+                          </span>
+                        </div>
+
+                        <div className="bg-[#0a0f20]/60 border border-emerald-500/10 rounded-2xl p-2.5">
+                          <span className="block text-[8px] text-emerald-400 uppercase tracking-wider font-bold mb-1">Disponible</span>
+                          <span className="text-[11px] font-black font-mono text-emerald-400 break-words">
+                            {(refStats.balanceCommission || 0).toLocaleString()} F
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Small Call-to-Action Info */}
+                      <div className="flex items-center gap-1.5 bg-[#0b1226]/80 px-3 py-2 rounded-xl border border-slate-800/60 text-[9px] text-gray-300 leading-normal">
+                        <span className="flex h-1.5 w-1.5 rounded-full bg-indigo-400 shrink-0"></span>
+                        <span>
+                          Gagnez <strong className="text-white">1% de commission</strong> sur tous les dépôts et retraits de vos filleuls + <strong className="text-emerald-400">500 FCFA</strong> de bienvenue sur votre premier dépôt d'au moins 1000 FCFA validé !
+                        </span>
+                      </div>
                     </div>
 
                     {/* 1XBET HOME PARTNER PROMO BLOCK */}
@@ -5538,6 +5652,76 @@ export default function App() {
                             {paymentMethodForm.isEditing ? 'Enregistrer' : '+ Ajouter'}
                           </button>
                         </div>
+                      </form>
+                    </div>
+
+                    {/* Broadcast Push Notifications Panel */}
+                    <div className="bg-[#111a33] border border-slate-800 rounded-3xl p-5 space-y-4 shadow-xl">
+                      <div className="flex justify-between items-center pb-2.5 border-b border-slate-800">
+                        <h4 className="text-xs font-extrabold font-display uppercase tracking-wider text-cyan-400 flex items-center gap-1.5">
+                          <Send size={14} className="text-cyan-400 animate-pulse" />
+                          Diffusion de Notification Push Globale 📱
+                        </h4>
+                        <span className="px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 text-[9px] font-extrabold uppercase font-mono tracking-widest">
+                          FCM Live Broadcaster
+                        </span>
+                      </div>
+
+                      <p className="text-[10.5px] text-gray-300 leading-relaxed">
+                        Envoyez instantanément une notification push sur les smartphones, tablettes et ordinateurs de <b>tous les utilisateurs enregistrés</b> de StarBetPay. Cet outil est idéal pour annoncer la mise en ligne de nouveaux coupons de pronostics, des promotions, ou des alertes de maintenance.
+                      </p>
+
+                      <form onSubmit={handleBroadcastPush} className="space-y-4 pt-1">
+                        <div>
+                          <label className="block text-gray-400 text-[9px] uppercase tracking-wider font-semibold mb-1 flex justify-between">
+                            <span>Titre de la notification</span>
+                            <span className="text-[8px] text-cyan-500 font-mono">Max 50 caractères conseillé</span>
+                          </label>
+                          <input 
+                            type="text" 
+                            placeholder="Ex : 🌟 NOUVEAU COUPON PRONOSTIC DISPONIBLE !" 
+                            className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white"
+                            value={broadcastTitle}
+                            onChange={(e) => setBroadcastTitle(e.target.value)}
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-gray-400 text-[9px] uppercase tracking-wider font-semibold mb-1 flex justify-between">
+                            <span>Message de la notification</span>
+                            <span className="text-[8px] text-cyan-500 font-mono">Max 150 caractères conseillé</span>
+                          </label>
+                          <textarea 
+                            rows={3}
+                            placeholder="Ex : Profitez de notre nouvelle opportunité ! Un combiné de Côte d'Ivoire de 2.15 vient d'être publié. Cliquez pour placer votre mise." 
+                            className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-3 py-2 text-xs text-white resize-none"
+                            value={broadcastMessage}
+                            onChange={(e) => setBroadcastMessage(e.target.value)}
+                          />
+                        </div>
+
+                        {broadcastStatus && (
+                          <div className={`p-3 rounded-xl border text-[10px] leading-relaxed ${
+                            broadcastStatus.success 
+                              ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-300' 
+                              : 'bg-red-500/5 border-red-500/20 text-red-300'
+                          }`}>
+                            <p className="font-bold mb-0.5">{broadcastStatus.success ? 'Succès !' : 'Échec :'}</p>
+                            <p className="font-mono break-all">{broadcastStatus.message}</p>
+                          </div>
+                        )}
+
+                        <button
+                          type="submit"
+                          disabled={broadcastStatus?.loading}
+                          className={`w-full py-2.5 rounded-xl text-xs font-extrabold uppercase tracking-wider transition-all outline-none flex items-center justify-center gap-1.5 ${
+                            broadcastStatus?.loading 
+                              ? 'bg-gray-800 text-gray-400 border border-slate-800 cursor-not-allowed' 
+                              : 'bg-gradient-to-r from-cyan-500 to-cyan-600 hover:from-cyan-400 hover:to-cyan-500 text-slate-950 shadow-md shadow-cyan-500/10'
+                          }`}
+                        >
+                          {broadcastStatus?.loading ? 'Diffusion en cours...' : '🚀 Envoyer la Notification à tout le monde'}
+                        </button>
                       </form>
                     </div>
 

@@ -298,6 +298,9 @@ async function sendFcmNotification(phone: string, title: string, message: string
     // Resolve recipient tokens
     const db = getDB();
     const recipientTokens = tokens.filter(t => {
+      if (phone === 'all') {
+        return true;
+      }
       if (phone === 'admin') {
         // If the recipient is admin, resolve standard admin phones
         const localUser = db.users[t.phone];
@@ -1064,28 +1067,73 @@ async function startServer() {
 
     // Process referral commission logic:
     // "Des bonus de 1% sur les dépôts et retrait valider par leur fieuls."
-    if (status === 'validated' && oldStatus !== 'validated' && !tx.appliedCommission) {
+    if (status === 'validated' && oldStatus !== 'validated') {
       const user = db.users[tx.userPhone];
-      if (user && user.parentPhone) {
-        const parent = db.users[user.parentPhone];
-        if (parent) {
-          const commission = tx.amount * 0.01; // 1% commission
-          parent.balanceCommission += commission;
-          tx.appliedCommission = true;
-          console.log(`Referral match: Credited ${commission} FCFA to Sponsor ${parent.phone} for user ${tx.userPhone} transacting ${tx.amount} FCFA`);
+      if (user) {
+        // 1% Sponsor commission
+        if (user.parentPhone && !tx.appliedCommission) {
+          const parent = db.users[user.parentPhone];
+          if (parent) {
+            const commission = tx.amount * 0.01; // 1% commission
+            parent.balanceCommission += commission;
+            tx.appliedCommission = true;
+            console.log(`Referral match: Credited ${commission} FCFA to Sponsor ${parent.phone} for user ${tx.userPhone} transacting ${tx.amount} FCFA`);
+          }
+        }
+
+        // Welcome / First-deposit bonus (500F) for the user who deposited at least 1000F
+        if (tx.type === 'deposit' && tx.amount >= 1000 && !tx.appliedFirstDepositBonus) {
+          // Check if this is their first validated deposit of at least 1000F
+          const hasOtherValidatedDeposit = db.transactions.some(t => 
+            t.userPhone === tx.userPhone &&
+            t.type === 'deposit' &&
+            t.status === 'validated' &&
+            t.id !== tx.id &&
+            t.amount >= 1000
+          );
+          if (!hasOtherValidatedDeposit) {
+            user.balanceCommission = (user.balanceCommission || 0) + 500;
+            tx.appliedFirstDepositBonus = true;
+            console.log(`Welcome Bonus: Credited 500 FCFA to User ${user.phone} for their first approved deposit of ${tx.amount} FCFA`);
+            
+            // Queue an extra notification specifically for the welcome bonus
+            setTimeout(() => {
+              try {
+                createNotification(
+                  tx.userPhone,
+                  "🎁 Cadeau de Bienvenue !",
+                  "Félicitations ! Vous avez reçu un bonus de parrainage de 500 FCFA pour votre tout premier dépôt validé d'au moins 1000 FCFA ! 🚀",
+                  "welcome_bonus",
+                  { txId: tx.id }
+                );
+              } catch (notifErr) {
+                console.error("Welcome bonus notification error:", notifErr);
+              }
+            }, 500);
+          }
         }
       }
     }
 
     // Cancel validation back to pending or rejected (decrement if commission was already calculated/applied)
-    if (status !== 'validated' && oldStatus === 'validated' && tx.appliedCommission) {
+    if (status !== 'validated' && oldStatus === 'validated') {
       const user = db.users[tx.userPhone];
-      if (user && user.parentPhone) {
-        const parent = db.users[user.parentPhone];
-        if (parent) {
-          const commission = tx.amount * 0.01;
-          parent.balanceCommission = Math.max(0, parent.balanceCommission - commission);
-          tx.appliedCommission = false;
+      if (user) {
+        // Revert 1% sponsor commission
+        if (user.parentPhone && tx.appliedCommission) {
+          const parent = db.users[user.parentPhone];
+          if (parent) {
+            const commission = tx.amount * 0.01;
+            parent.balanceCommission = Math.max(0, parent.balanceCommission - commission);
+            tx.appliedCommission = false;
+          }
+        }
+
+        // Revert 500F first-deposit bonus
+        if (tx.appliedFirstDepositBonus) {
+          user.balanceCommission = Math.max(0, (user.balanceCommission || 0) - 500);
+          tx.appliedFirstDepositBonus = false;
+          console.log(`Reverted welcome bonus: Deducted 500 FCFA from User ${user.phone} due to transaction reversion.`);
         }
       }
     }
@@ -1415,6 +1463,27 @@ async function startServer() {
     }
     saveDB(db);
     res.json({ success: true });
+  });
+
+  // Broadcast a push notification to all users (Admin only)
+  app.post('/api/fcm/broadcast', async (req, res) => {
+    const { phone, title, message } = req.body;
+    if (!phone || !title || !message) {
+      return res.status(400).json({ error: 'phone, title, and message are required' });
+    }
+    const db = getDB();
+    const user = db.users[phone];
+    if (!user || user.role !== 'admin') {
+      return res.status(403).json({ error: 'Accès interdit : Administrateurs uniquement' });
+    }
+
+    try {
+      await sendFcmNotification('all', title, message, { type: 'broadcast' });
+      res.json({ success: true, message: 'Notification push globale diffusée avec succès !' });
+    } catch (err: any) {
+      console.error('[Broadcast FCM Error]:', err);
+      res.status(500).json({ error: 'Erreur lors de la diffusion : ' + err.message });
+    }
   });
 
   // Server Sent Events (SSE) stream for user-specific real-time notifications

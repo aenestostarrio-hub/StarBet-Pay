@@ -28,6 +28,7 @@ export interface DBTransaction {
   date: string;
   rejectionReason?: string;
   appliedCommission?: boolean;
+  appliedFirstDepositBonus?: boolean;
 }
 
 export interface PaymentMethod {

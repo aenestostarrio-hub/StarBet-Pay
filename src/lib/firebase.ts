@@ -1587,6 +1587,7 @@ export const dbService = {
       const tx = docSnap.data() as DBTransaction;
       const oldStatus = tx.status;
       const appliedCommission = !!tx.appliedCommission;
+      const appliedFirstDepositBonus = !!tx.appliedFirstDepositBonus;
 
       const updates: any = { status };
       if (rejectionReason !== undefined) {
@@ -1595,6 +1596,7 @@ export const dbService = {
       }
 
       let nextAppliedCommission = appliedCommission;
+      let nextAppliedFirstDepositBonus = appliedFirstDepositBonus;
 
       // Apply referral 1% logic on first transition to 'validated'
       if (status === 'validated' && oldStatus !== 'validated' && !appliedCommission && tx.type === 'deposit') {
@@ -1613,6 +1615,29 @@ export const dbService = {
               updates.appliedCommission = true;
               nextAppliedCommission = true;
             }
+          }
+        }
+      }
+
+      // Welcome/First-deposit bonus of 500F for first deposit >= 1000F
+      if (status === 'validated' && oldStatus !== 'validated' && !appliedFirstDepositBonus && tx.type === 'deposit' && Number(tx.amount) >= 1000) {
+        // Query other validated deposits for this user
+        const qSnap = await getDocs(query(
+          collection(db, 'transactions'), 
+          where('userPhone', '==', tx.userPhone), 
+          where('type', '==', 'deposit'), 
+          where('status', '==', 'validated')
+        ));
+        const hasOtherValidatedDeposit = qSnap.docs.some(doc => doc.id !== tx.id && Number(doc.data().amount || 0) >= 1000);
+        if (!hasOtherValidatedDeposit) {
+          const userDocRef = doc(db, 'users', tx.userPhone);
+          const userDoc = await getDoc(userDocRef);
+          if (userDoc.exists()) {
+            const user = userDoc.data() as DBUser;
+            const newBal = Number(user.balanceCommission || 0) + 500;
+            await updateDoc(userDocRef, { balanceCommission: newBal });
+            updates.appliedFirstDepositBonus = true;
+            nextAppliedFirstDepositBonus = true;
           }
         }
       }
@@ -1638,9 +1663,23 @@ export const dbService = {
         }
       }
 
+      // Decrement/Cancel welcome bonus if status is changed back from validated
+      if (status !== 'validated' && oldStatus === 'validated' && appliedFirstDepositBonus && tx.type === 'deposit') {
+        const userDocRef = doc(db, 'users', tx.userPhone);
+        const userDoc = await getDoc(userDocRef);
+        if (userDoc.exists()) {
+          const user = userDoc.data() as DBUser;
+          const newBal = Math.max(0, Number(user.balanceCommission || 0) - 500);
+          await updateDoc(userDocRef, { balanceCommission: newBal });
+          updates.appliedFirstDepositBonus = false;
+          nextAppliedFirstDepositBonus = false;
+        }
+      }
+
       await updateDoc(docRef, updates);
       tx.status = status;
       tx.appliedCommission = nextAppliedCommission;
+      tx.appliedFirstDepositBonus = nextAppliedFirstDepositBonus;
       return tx;
     } catch (e) {
       if (isOfflineOrError(e)) {
@@ -1656,6 +1695,7 @@ export const dbService = {
         const tx = ldb.transactions[txIdx];
         const oldStatus = tx.status;
         const appliedCommission = !!tx.appliedCommission;
+        const appliedFirstDepositBonus = !!tx.appliedFirstDepositBonus;
         
         tx.status = status;
         if (rejectionReason !== undefined) {
@@ -1674,6 +1714,24 @@ export const dbService = {
             }
           }
         }
+
+        // Welcome bonus simulation
+        if (status === 'validated' && oldStatus !== 'validated' && !appliedFirstDepositBonus && tx.type === 'deposit' && Number(tx.amount) >= 1000) {
+          const hasOtherValidatedDeposit = ldb.transactions.some(t => 
+            t.userPhone === tx.userPhone &&
+            t.type === 'deposit' &&
+            t.status === 'validated' &&
+            t.id !== tx.id &&
+            Number(t.amount) >= 1000
+          );
+          if (!hasOtherValidatedDeposit) {
+            const user = ldb.users[tx.userPhone];
+            if (user) {
+              user.balanceCommission = Number(user.balanceCommission || 0) + 500;
+              tx.appliedFirstDepositBonus = true;
+            }
+          }
+        }
         
         if (status !== 'validated' && oldStatus === 'validated' && appliedCommission && tx.type === 'deposit') {
           const user = ldb.users[tx.userPhone];
@@ -1684,6 +1742,15 @@ export const dbService = {
               parent.balanceCommission = Math.max(0, Number(parent.balanceCommission || 0) - extraCommission);
               tx.appliedCommission = false;
             }
+          }
+        }
+
+        // Revert Welcome bonus simulation
+        if (status !== 'validated' && oldStatus === 'validated' && appliedFirstDepositBonus && tx.type === 'deposit') {
+          const user = ldb.users[tx.userPhone];
+          if (user) {
+            user.balanceCommission = Math.max(0, Number(user.balanceCommission || 0) - 500);
+            tx.appliedFirstDepositBonus = false;
           }
         }
         
