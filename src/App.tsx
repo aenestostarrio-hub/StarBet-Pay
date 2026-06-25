@@ -3,7 +3,7 @@ import {
   Star, Shield, RefreshCw, LogOut, CheckCircle2, AlertCircle, XCircle, X, 
   Plus, Copy, Check, Upload, Send, MessageSquare, Phone, Info, MapPin, 
   PlusCircle, Sparkles, AlertTriangle, ArrowUpRight, BarChart3, TrendingUp, Users, Wallet, Eye, Download, Bell, Volume2, ShieldAlert, Award,
-  Edit, Calendar, ChevronDown, Share2, Globe, Trash2
+  Edit, Calendar, ChevronDown, Share2, Globe, Trash2, Gift, Tag
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { InstallPrompt } from './components/InstallPrompt';
@@ -2278,18 +2278,34 @@ export default function App() {
                   </div>
 
                   {authTab === 'register' && (
-                    <div>
-                      <label className="block text-gray-400 text-[11px] uppercase tracking-wider font-semibold mb-1">
-                        Code de parrainage / Promo <span className="text-[10px] text-gray-500 font-normal normal-case">(Optionnel)</span>
-                      </label>
-                      <input 
-                        type="text" 
-                        placeholder="Entrez le code ou numéro du parrain"
-                        className="w-full bg-[#0d1326] border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-cyan-400 font-mono placeholder-gray-600 focus:outline-none focus:border-cyan-500 transition-colors disabled:opacity-50"
-                        value={authForm.parentPhone}
-                        onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
-                        disabled={isAuthLoading}
-                      />
+                    <div className="bg-[#121c38]/60 border border-dashed border-indigo-500/30 rounded-2xl p-4 space-y-3 shadow-inner text-left">
+                      <div className="flex gap-3 items-start">
+                        <div className="text-3xl shrink-0 select-none animate-bounce" style={{ animationDuration: '3s' }}>
+                          🎁
+                        </div>
+                        <div className="space-y-0.5">
+                          <h5 className="text-[11.5px] font-extrabold text-white font-display">
+                            Vous avez été invité ?
+                          </h5>
+                          <p className="text-[10px] text-gray-300 leading-relaxed">
+                            Entrez le code de votre parrain pour recevoir <strong className="text-emerald-400">500 F</strong> de bonus sur votre premier dépôt validé d'au moins <strong className="text-cyan-400">1000 F</strong>.
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="relative flex items-center">
+                        <span className="absolute left-3 text-gray-500">
+                          <Tag size={13} className="text-indigo-400" />
+                        </span>
+                        <input 
+                          type="text" 
+                          placeholder="Code d'invitation (Optionnel)"
+                          className="w-full bg-[#080d1a] border border-slate-800 focus:border-indigo-500/60 rounded-xl pl-8 pr-4 py-2 text-xs text-cyan-400 font-mono placeholder-gray-500 focus:outline-none transition-colors disabled:opacity-50"
+                          value={authForm.parentPhone}
+                          onChange={(e) => setAuthForm({ ...authForm, parentPhone: e.target.value })}
+                          disabled={isAuthLoading}
+                        />
+                      </div>
                     </div>
                   )}
 
@@ -3557,6 +3573,38 @@ export default function App() {
                           >
                             Copier
                           </button>
+                        </div>
+                      </div>
+
+                      {/* Message de Partage Personnalisé */}
+                      <div className="space-y-1.5 pt-2 border-t border-slate-800/60">
+                        <span className="text-[9px] text-gray-400 font-bold uppercase flex items-center gap-1">
+                          Message d'Invitation Personnalisé 🚀
+                        </span>
+                        <div className="bg-[#090f22] border border-slate-850 rounded-xl p-3 text-[10.5px] text-gray-300 font-sans whitespace-pre-wrap leading-relaxed relative">
+                          {`🎁 Rejoins StarBet Pay et reçois 500 F de bonus de bienvenue après ton premier dépôt de 1000 F minimum.\n\n⚡ Dépôt et retrait rapides\n⚡ Notifications instantanées\n⚡ Bonus offert dès ton premier dépôt\n\nInscris-toi ici :\n${window.location.origin}/?ref=${refStats.referralCode || user?.phone}`}
+                        </div>
+                        <div className="flex gap-2 pt-1">
+                          <button
+                            onClick={() => {
+                              const shareText = `🎁 Rejoins StarBet Pay et reçois 500 F de bonus de bienvenue après ton premier dépôt de 1000 F minimum.\n\n⚡ Dépôt et retrait rapides\n⚡ Notifications instantanées\n⚡ Bonus offert dès ton premier dépôt\n\nInscris-toi ici :\n${window.location.origin}/?ref=${refStats.referralCode || user?.phone}`;
+                              navigator.clipboard.writeText(shareText);
+                              showToast('Message d\'invitation copié ! 📋', 'success');
+                            }}
+                            className="flex-1 py-1.5 bg-[#1e2a4a] hover:bg-[#283863] border border-cyan-500/10 text-cyan-400 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer text-center"
+                          >
+                            Copier le message
+                          </button>
+                          <a
+                            href={`https://api.whatsapp.com/send?text=${encodeURIComponent(
+                              `🎁 Rejoins StarBet Pay et reçois 500 F de bonus de bienvenue après ton premier dépôt de 1000 F minimum.\n\n⚡ Dépôt et retrait rapides\n⚡ Notifications instantanées\n⚡ Bonus offert dès ton premier dépôt\n\nInscris-toi ici :\n${window.location.origin}/?ref=${refStats.referralCode || user?.phone}`
+                            )}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="py-1.5 px-3 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/20 text-emerald-400 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer flex items-center gap-1 justify-center"
+                          >
+                            Partager sur WhatsApp
+                          </a>
                         </div>
                       </div>
                     </div>
